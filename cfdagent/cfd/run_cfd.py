@@ -1,65 +1,172 @@
-import json
-import shutil
-import subprocess
-import uuid
+from __future__ import annotations
+
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict
+import subprocess
+import csv
+import shutil
+import re
 
-from .postprocess import extract_metrics
-from ..geometry.airfoil_param import design_to_airfoil_coords
-from ..utils.io_utils import append_design_result
 
-BASE_CASE = Path(__file__).resolve().parents[0] / "base_case"
-RUN_ROOT = Path(__file__).resolve().parents[0] / "runs"
-RUN_ROOT.mkdir(parents=True, exist_ok=True)
+@dataclass
+class Su2RunConfig:
+    """Configuration for running a SU2 CFD case from Python."""
 
-def update_geometry_and_mesh(run_dir: Path, design_vec):
+    workdir: Path
+    base_config_name: str = "config.cfg"
+    su2_executable: str = "SU2_CFD"
+    history_file_name: str = "history.csv"
+
+
+def create_modified_config(base_cfg: Path, out_cfg: Path, param_overrides: dict[str, float | int | str]) -> None:
     """
-    Update geometry and mesh files inside run_dir based on design_vec.
-    Placeholder for Phase 0.
+    Read a SU2 config file, apply overrides to specific SU2 keywords,
+    and write the modified config to out_cfg.
+
+    Rules:
+    - For every key in param_overrides, the key must match a line in the config that
+      begins with "<KEY>=" exactly.
+    - Replace the entire RHS with the new value.
+    - Preserve all other lines unchanged.
+    - If a keyword is missing in the file, raise a KeyError.
     """
-    raise NotImplementedError("geometry/mesh update not implemented yet")
+
+    lines = base_cfg.read_text().splitlines(keepends=True)
+    overrides_applied: set[str] = set()
+
+    for idx, line in enumerate(lines):
+        for key, value in param_overrides.items():
+            if line.startswith(f"{key}="):
+                lines[idx] = f"{key}= {value}\n"
+                overrides_applied.add(key)
+
+    missing_keys = set(param_overrides) - overrides_applied
+    if missing_keys:
+        raise KeyError(f"Missing keys in config: {sorted(missing_keys)}")
+
+    out_cfg.write_text("".join(lines))
 
 
-def run_cfd(design_id: str, design_vec) -> Dict[str, Any]:
-    run_dir = RUN_ROOT / f"run_{design_id}"
-    if run_dir.exists():
-        shutil.rmtree(run_dir)
-    shutil.copytree(BASE_CASE, run_dir)
+def parse_history_file(path: Path) -> dict:
+    """
+    Parse a SU2 history file (.csv or .dat).
+    Return the last meaningful data row as a dict.
+    If the file does not exist or is empty, return {}.
+    """
 
-    try:
-        design_to_airfoil_coords(design_vec)
-        update_geometry_and_mesh(run_dir, design_vec)
-    except NotImplementedError:
-        pass
+    if not path or not path.exists():
+        return {}
 
-    config_path = run_dir / "config.cfg"
+    with path.open("r", newline="") as csvfile:
+        data_lines = [line for line in csvfile if line.strip() and not line.lstrip().startswith(("%", "#"))]
 
-    result = {
-        "design_id": design_id,
-        "success": False,
-        "Cl": None,
-        "Cd": None,
-        "residual": None,
-        "run_dir": str(run_dir),
+    if not data_lines:
+        return {}
+
+    reader = csv.reader(data_lines)
+    header = next(reader, None)
+    if not header:
+        return {}
+
+    last_row: list[str] | None = None
+    for row in reader:
+        if row:
+            last_row = row
+
+    if not last_row:
+        return {}
+
+    def convert(value: str) -> float | int | str:
+        try:
+            num = float(value)
+            if num.is_integer():
+                return int(num)
+            return num
+        except ValueError:
+            return value
+
+    return {key: convert(val) for key, val in zip(header, last_row)}
+
+
+def run_su2_case(cfg: Su2RunConfig, param_overrides: dict[str, float | int | str] | None = None, timeout: int = 3600) -> dict:
+    """
+    Run a SU2 CFD simulation using the config file in cfg.workdir.
+
+    Steps:
+    - Determine the working directory: cfg.workdir.
+    - If param_overrides is provided:
+        * Create a new config file in workdir named "config_override.cfg".
+        * Call create_modified_config(...) to apply changes.
+        * Run SU2_CFD on that overridden file.
+      Else:
+        * Run SU2_CFD on cfg.base_config_name.
+    - Use subprocess.run([...], cwd=cfg.workdir, capture_output=True, text=True).
+    - If returncode != 0, raise a RuntimeError with useful stderr information.
+    - After the run, detect the history file:
+        * If cfg.history_file_name exists, use it.
+        * Otherwise, find the newest file starting with "history".
+    - Parse the history file:
+        * Skip comment lines (% or #).
+        * Assume first non-comment line is header.
+        * Read last row.
+        * Convert numeric fields where possible.
+    - Return a dict containing:
+        {
+          "config_path": Path to the config used,
+          "stdout": command stdout,
+          "stderr": command stderr,
+          "history_path": path to history file or None,
+          "history_data": last-row dict or {},
+        }
+    """
+
+    workdir = cfg.workdir
+    base_cfg = workdir / cfg.base_config_name
+
+    if param_overrides:
+        override_cfg = workdir / "config_override.cfg"
+        create_modified_config(base_cfg, override_cfg, param_overrides)
+        config_to_run = override_cfg
+    else:
+        config_to_run = base_cfg
+
+    cmd = [cfg.su2_executable, str(config_to_run)]
+    proc = subprocess.run(cmd, cwd=workdir, capture_output=True, text=True, timeout=timeout)
+
+    if proc.returncode != 0:
+        raise RuntimeError(f"SU2_CFD failed with code {proc.returncode}: {proc.stderr}")
+
+    history_path: Path | None = workdir / cfg.history_file_name
+    if not history_path.exists():
+        history_candidates = sorted(workdir.glob("history*"), key=lambda p: p.stat().st_mtime, reverse=True)
+        history_path = history_candidates[0] if history_candidates else None
+
+    history_data: dict = {}
+    if history_path:
+        history_data = parse_history_file(history_path)
+
+    return {
+        "config_path": config_to_run,
+        "stdout": proc.stdout,
+        "stderr": proc.stderr,
+        "history_path": history_path,
+        "history_data": history_data,
     }
 
-    proc = subprocess.run(
-        ["SU2_CFD", str(config_path)],
-        cwd=run_dir,
-        capture_output=True,
-        text=True,
+
+def main() -> None:
+    base_dir = Path(__file__).resolve().parent / "base_case"
+    cfg = Su2RunConfig(workdir=base_dir)
+    result = run_su2_case(
+        cfg,
+        param_overrides={
+            "MACH_NUMBER": 0.15,
+            "AOA": 10.0,
+        },
     )
+    print("History file:", result["history_path"])
+    print("Last row:", result["history_data"])
 
-    if proc.returncode == 0:
-        history_file = run_dir / "history.csv"
-        metrics = extract_metrics(history_file)
-        result.update({"success": True, **metrics})
-    else:
-        result["success"] = False
 
-    meta_path = run_dir / "meta.json"
-    with meta_path.open("w") as f:
-        json.dump(result, f, indent=2)
-
-    return result
+if __name__ == "__main__":
+    main()
