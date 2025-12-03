@@ -1,0 +1,20 @@
+model:
+  type: unet
+  in_channels: 3         # e.g. geometry image + AoA + Re channels
+  base_channels: 32
+  num_levels: 4
+  out_channels: 3        # u, v, p fields
+
+training:
+  learning_rate: 1.0e-3
+  batch_size: 4
+  max_epochs: 100
+  weight_decay: 1.0e-5
+
+physics_loss:
+  continuity_weight: 1.0
+  momentum_weight: 0.0   # can be enabled later
+
+data:
+  fields_dir: data/fields
+  designs_csv: data/designs.csv
