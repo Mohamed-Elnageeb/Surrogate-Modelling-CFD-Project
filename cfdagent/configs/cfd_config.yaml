@@ -1,0 +1,21 @@
+solver: SU2
+
+free_stream:
+  reynolds_number: 5.0e5
+  mach_number: 0.05
+  angle_of_attack_deg: 4.0
+  density: 1.225        # kg/m^3
+  viscosity: 1.7894e-5  # kg/(m·s)
+
+physical_model:
+  flow: incompressible
+  turbulence_model: laminar  # can be changed later to SA/RANS
+
+numerics:
+  max_iterations: 2000
+  convergence_tolerance: 1.0e-6
+
+mesh:
+  base_case_dir: cfdagent/cfd/base_case
+  config_filename: config.cfg
+  mesh_filename: mesh.su2
