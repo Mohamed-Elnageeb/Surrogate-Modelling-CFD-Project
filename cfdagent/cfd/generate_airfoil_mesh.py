@@ -132,8 +132,21 @@ def generate_mesh(
         upper_points = coords[:num_surface_points]
         lower_points = coords[num_surface_points:]
 
-        upper_tags = [add_point(pt, mesh_size_airfoil) for pt in upper_points]
-        lower_tags = [add_point(pt, mesh_size_airfoil) for pt in lower_points]
+        # Enforce shared tags at the leading and trailing edges to guarantee the
+        # inner airfoil loop is perfectly closed even with floating point noise.
+        leading_tag = add_point(upper_points[0], mesh_size_airfoil)
+        trailing_tag = add_point(upper_points[-1], mesh_size_airfoil)
+
+        upper_tags = (
+            [leading_tag]
+            + [add_point(pt, mesh_size_airfoil) for pt in upper_points[1:-1]]
+            + [trailing_tag]
+        )
+        lower_tags = (
+            [trailing_tag]
+            + [add_point(pt, mesh_size_airfoil) for pt in lower_points[1:-1]]
+            + [leading_tag]
+        )
 
         spline_upper = gmsh.model.occ.addSpline(upper_tags)
         spline_lower = gmsh.model.occ.addSpline(lower_tags)
