@@ -8,22 +8,23 @@ from __future__ import annotations
 
 import argparse
 import math
-import sys
 from typing import List, Tuple
 
 try:
     import gmsh  # type: ignore
-except ImportError as exc:  # pragma: no cover - optional dependency
-    print(
-        "The Gmsh Python API is required to run this module. "
-        "Install Gmsh (pip install gmsh) and try again.",
-        file=sys.stderr,
-    )
-    raise SystemExit(1) from exc
+except ImportError:  # pragma: no cover - optional dependency
+    gmsh = None
 
 
 def _cosine_spacing(num: int) -> List[float]:
     return [0.5 * (1 - math.cos(math.pi * i / (num - 1))) for i in range(num)]
+
+
+def _require_gmsh() -> None:
+    if gmsh is None:
+        raise RuntimeError(
+            "The Gmsh Python API is required. Install it with `pip install gmsh` to generate meshes."
+        )
 
 
 def naca4_points(code: str, n: int, chord: float, spacing: str = "cosine") -> List[Tuple[float, float]]:
@@ -111,6 +112,8 @@ def generate_mesh(
     outfile: str = "mesh.su2",
 ) -> None:
     """Generate and write an SU2 mesh for the specified NACA airfoil."""
+
+    _require_gmsh()
 
     gmsh.initialize()
     gmsh.model.add("naca_airfoil")
