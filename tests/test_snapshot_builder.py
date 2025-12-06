@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 np = pytest.importorskip("numpy")
+meshio = pytest.importorskip("meshio")
 
 from cfdagent.surrogate.snapshot_builder import (
     SnapshotConfig,
@@ -214,3 +215,86 @@ def test_save_snapshot_from_arrays_roundtrip(tmp_path: Path):
         save_snapshot_from_arrays(out_path, input_arr.reshape(2, 4), target_arr, cl=0.5, cd=0.1)
     with pytest.raises(ValueError):
         save_snapshot_from_arrays(out_path, input_arr, target_arr.reshape(4, 1), cl=0.5, cd=0.1)
+
+
+def test_su2_to_unet_snapshot_loads_vtu_and_history(tmp_path: Path):
+    points = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 1.0, 0.0],
+        ]
+    )
+    cells = [("quad", np.array([[0, 1, 3, 2]]))]
+    point_data = {
+        "Mach": np.array([0.1, 0.2, 0.3, 0.4], dtype=float),
+        "Pressure": np.array([101000.0, 102000.0, 103000.0, 104000.0], dtype=float),
+        "Temperature": np.array([300.0, 310.0, 320.0, 330.0], dtype=float),
+        "Velocity": np.array(
+            [
+                [10.0, 20.0, 0.0],
+                [30.0, 40.0, 0.0],
+                [50.0, 60.0, 0.0],
+                [70.0, 80.0, 0.0],
+            ]
+        ),
+    }
+
+    volume_path = tmp_path / "flow.vtu"
+    meshio.write(volume_path, meshio.Mesh(points, cells, point_data=point_data))
+
+    history_path = tmp_path / "history.csv"
+    history_path.write_text("Iter,CL,CD\n1,0.4,0.01\n2,0.6,0.02\n")
+
+    cfg = SnapshotConfig(
+        input_fields=["Mach", "Pressure", "Temperature"],
+        target_fields=["u", "v", "Pressure"],
+        grid_shape=(2, 2),
+        cl_name="CL",
+        cd_name="CD",
+    )
+
+    out_path = tmp_path / "snap_vtu.npz"
+    su2_to_unet_snapshot(volume_path, None, out_path, cfg, history_path=history_path)
+
+    with np.load(out_path) as data:
+        assert data["input"].shape == (3, 2, 2)
+        assert data["target_fields"].shape == (3, 2, 2)
+        assert np.allclose(data["input"][0].flatten(), point_data["Mach"])
+        assert np.allclose(data["target_fields"][0].flatten(), point_data["Velocity"][:, 0])
+        assert float(data["cl"]) == pytest.approx(0.6)
+        assert float(data["cd"]) == pytest.approx(0.02)
+
+
+def test_su2_to_unet_snapshot_uses_history_when_surface_missing(tmp_path: Path):
+    volume_path = tmp_path / "volume.dat"
+    volume_path.write_text(
+        """
+# Comment line
+x,y,p,u,v
+0.0,0.0,1.0,0.1,0.2
+1.0,0.0,2.0,0.3,0.4
+0.0,1.0,3.0,0.5,0.6
+1.0,1.0,4.0,0.7,0.8
+""".strip()
+    )
+
+    history_path = tmp_path / "history.csv"
+    history_path.write_text("Iter,CL,CD\n1,0.4,0.01\n2,0.5,0.02\n")
+
+    cfg = SnapshotConfig(
+        input_fields=["p", "u"],
+        target_fields=["v"],
+        grid_shape=(2, 2),
+        cl_name="CL",
+        cd_name="CD",
+    )
+
+    out_path = tmp_path / "snap.npz"
+    su2_to_unet_snapshot(volume_path, None, out_path, cfg, history_path=history_path)
+
+    with np.load(out_path) as data:
+        assert set(data.keys()) == {"input", "target_fields", "cl", "cd"}
+        assert float(data["cl"]) == pytest.approx(0.5)
+        assert float(data["cd"]) == pytest.approx(0.02)
