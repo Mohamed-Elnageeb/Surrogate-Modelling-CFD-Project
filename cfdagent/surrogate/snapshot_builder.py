@@ -30,7 +30,18 @@ def _is_comment_or_empty(line: str) -> bool:
     return not stripped or stripped.startswith(("#", "%"))
 
 
+def _strip_inline_comment(line: str) -> str:
+    """Remove trailing inline comments introduced with '#' or '%'."""
+
+    for marker in ("#", "%"):
+        comment_idx = line.find(marker)
+        if comment_idx != -1:
+            return line[:comment_idx]
+    return line
+
+
 def _split_line(line: str) -> list[str]:
+    line = _strip_inline_comment(line)
     tokens = [token.strip() for token in line.split(",")] if "," in line else line.split()
     # Some SU2 tables include trailing delimiters that yield empty tokens; drop them so
     # row-length validation does not incorrectly fail.
@@ -80,10 +91,25 @@ def read_su2_table(path: Path) -> Dict[str, np.ndarray]:
             continue
 
         tokens = _split_line(line)
-        if len(tokens) != len(header_fields):
+
+        numeric_tokens: list[str] = []
+        first_non_numeric_found = False
+        for tok in tokens:
+            try:
+                float(tok)
+            except ValueError:
+                first_non_numeric_found = True
+                break
+            numeric_tokens.append(tok)
+
+        if len(numeric_tokens) < len(header_fields):
             raise ValueError("Row column count does not match header")
+        if len(numeric_tokens) > len(header_fields) and not first_non_numeric_found:
+            raise ValueError("Row column count does not match header")
+
+        row_tokens = numeric_tokens[: len(header_fields)]
         try:
-            row = [float(tok) for tok in tokens]
+            row = [float(tok) for tok in row_tokens]
         except ValueError as exc:  # pragma: no cover - defensive
             raise ValueError("Non-numeric value encountered") from exc
         data_rows.append(row)

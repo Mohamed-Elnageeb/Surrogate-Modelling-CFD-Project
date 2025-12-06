@@ -38,6 +38,52 @@ x,y,p,u,v
     assert table["u"][3] == 0.7
 
 
+def test_read_su2_table_handles_inline_comments(tmp_path: Path):
+    volume_path = tmp_path / "volume.dat"
+    volume_path.write_text(
+        """
+% Header comment
+x, y, p
+0.0, 0.0, 1.0  # leading point
+1.0, 0.0, 2.0  % another point
+""".strip()
+    )
+
+    table = read_su2_table(volume_path)
+
+    assert table["p"].shape == (2,)
+    assert table["p"][0] == pytest.approx(1.0)
+    assert table["p"][1] == pytest.approx(2.0)
+
+
+def test_read_su2_table_ignores_trailing_text_tokens(tmp_path: Path):
+    volume_path = tmp_path / "volume.dat"
+    volume_path.write_text(
+        """
+x, y, p
+0.0, 0.0, 1.0, , , Trailing text
+1.0, 0.0, 2.0, success
+""".strip()
+    )
+
+    table = read_su2_table(volume_path)
+
+    assert table["p"].tolist() == [1.0, 2.0]
+
+
+def test_read_su2_table_rejects_extra_numeric_columns(tmp_path: Path):
+    volume_path = tmp_path / "volume.dat"
+    volume_path.write_text(
+        """
+x, y, p
+0.0, 0.0, 1.0, 4.0
+""".strip()
+    )
+
+    with pytest.raises(ValueError, match="Row column count does not match header"):
+        read_su2_table(volume_path)
+
+
 def test_build_field_tensor_stacks_and_reshapes(tmp_path: Path):
     volume_path = tmp_path / "volume.dat"
     volume_path.write_text(
