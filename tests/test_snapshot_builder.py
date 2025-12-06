@@ -38,6 +38,20 @@ x,y,p,u,v
     assert table["u"][3] == 0.7
 
 
+def test_read_su2_table_rejects_vtk_like_content(tmp_path: Path):
+    vtk_path = tmp_path / "flow_fields.vtu"
+    vtk_path.write_text(
+        """
+<?xml version="1.0"?>
+<VTKFile type="UnstructuredGrid" version="1.0" byte_order="LittleEndian">
+<UnstructuredGrid>
+""".strip()
+    )
+
+    with pytest.raises(ValueError):
+        read_su2_table(vtk_path)
+
+
 def test_read_su2_table_handles_inline_comments(tmp_path: Path):
     volume_path = tmp_path / "volume.dat"
     volume_path.write_text(

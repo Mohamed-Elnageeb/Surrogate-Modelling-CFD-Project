@@ -30,6 +30,20 @@ def _is_comment_or_empty(line: str) -> bool:
     return not stripped or stripped.startswith(("#", "%"))
 
 
+def _looks_binary(raw: bytes) -> bool:
+    sample = raw[:4096]
+    if not sample:
+        return False
+    # Heuristic: if we encounter any NUL bytes or more than 30% non-printable
+    # characters, treat the content as binary. This prevents us from spamming
+    # NaN conversion logs on files such as VTU with appended binary payloads.
+    if b"\x00" in sample:
+        return True
+
+    printable = bytes(c for c in sample if 32 <= c <= 126 or c in (9, 10, 13))
+    return len(printable) / len(sample) < 0.7
+
+
 def _strip_inline_comment(line: str) -> str:
     """Remove trailing inline comments introduced with '#' or '%'"""
 
@@ -73,10 +87,16 @@ def read_su2_table(path: Path) -> Dict[str, np.ndarray]:
         ValueError if the file has no header, inconsistent columns, or no data.
     """
 
+    raw_bytes = path.read_bytes()
+    if _looks_binary(raw_bytes):
+        raise ValueError(
+            f"File appears to be binary or not a plain-text SU2 table: {path}"
+        )
+
     try:
-        text = path.read_text(encoding="utf-8")
+        text = raw_bytes.decode("utf-8")
     except UnicodeDecodeError:
-        text = path.read_text(encoding="latin-1")
+        text = raw_bytes.decode("latin-1")
     lines = text.splitlines()
 
     header_fields: list[str] | None = None
@@ -88,6 +108,12 @@ def read_su2_table(path: Path) -> Dict[str, np.ndarray]:
             continue
 
         if header_fields is None:
+            stripped = line.lstrip()
+            if stripped.startswith("<"):
+                raise ValueError(
+                    "File appears to be XML/VTK rather than an SU2 table: "
+                    f"{path}"
+                )
             header_fields = _tokenize_line(line, ",")
             # Use the header to decide whether the file is comma- or whitespace-separated.
             delimiter = "," if "," in line else ""
