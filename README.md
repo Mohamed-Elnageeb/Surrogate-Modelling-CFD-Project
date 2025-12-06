@@ -22,6 +22,9 @@ solver while a physics-aware U‑Net accelerates design exploration.
 1. **Install SU2** and ensure the `SU2_CFD` binary is on your `PATH`.
 2. **Prepare a base case** by placing a working 2‑D airfoil mesh and
    configuration inside `cfdagent/cfd/base_case` as `mesh.su2` and `config.cfg`.
+   The repository already includes a baseline NACA 0012 setup (copied from
+   `TestCases/airfoil_naca0012_opt`) so you can run the dataset script out of
+   the box.
 3. **Set up Python**:
    ```bash
    python -m venv .venv
