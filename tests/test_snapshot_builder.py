@@ -38,6 +38,88 @@ x,y,p,u,v
     assert table["u"][3] == 0.7
 
 
+def test_read_su2_table_rejects_vtk_like_content(tmp_path: Path):
+    vtk_path = tmp_path / "flow_fields.vtu"
+    vtk_path.write_text(
+        """
+<?xml version="1.0"?>
+<VTKFile type="UnstructuredGrid" version="1.0" byte_order="LittleEndian">
+<UnstructuredGrid>
+""".strip()
+    )
+
+    with pytest.raises(ValueError):
+        read_su2_table(vtk_path)
+
+
+def test_read_su2_table_handles_inline_comments(tmp_path: Path):
+    volume_path = tmp_path / "volume.dat"
+    volume_path.write_text(
+        """
+% Header comment
+x, y, p
+0.0, 0.0, 1.0  # leading point
+1.0, 0.0, 2.0  % another point
+""".strip()
+    )
+
+    table = read_su2_table(volume_path)
+
+    assert table["p"].shape == (2,)
+    assert table["p"][0] == pytest.approx(1.0)
+    assert table["p"][1] == pytest.approx(2.0)
+
+
+def test_read_su2_table_ignores_trailing_text_tokens(tmp_path: Path):
+    volume_path = tmp_path / "volume.dat"
+    volume_path.write_text(
+        """
+x, y, p
+0.0, 0.0, 1.0, , , Trailing text
+1.0, 0.0, 2.0, success
+""".strip()
+    )
+
+    table = read_su2_table(volume_path)
+
+    assert table["p"].tolist() == [1.0, 2.0]
+
+
+def test_read_su2_table_pads_and_trims_rows(tmp_path: Path):
+    volume_path = tmp_path / "volume.dat"
+    volume_path.write_text(
+        """
+x, y, p
+0.0, 0.0
+1.0, 0.0, 2.0, 4.0, 5.0
+""".strip()
+    )
+
+    table = read_su2_table(volume_path)
+
+    assert table["x"].tolist() == [0.0, 1.0]
+    assert table["y"].tolist() == [0.0, 0.0]
+    assert np.isnan(table["p"][0])
+    assert table["p"][1] == pytest.approx(2.0)
+
+
+def test_read_su2_table_handles_non_numeric_and_missing_values(tmp_path: Path):
+    volume_path = tmp_path / "volume.dat"
+    volume_path.write_text(
+        """
+design_id,dc1,dc2,dc3,dc4,dc5,dt1,dt2,dt3,dt4,dt5,Cl,Cd,residual,success,error,snapshot_error
+34eb1a35,-0.0172,0.0003,-0.0194,-0.0005,-0.0149,0.0079,0.0079,-0.0149,0.0064,0.0121,,,,True,,Row column count does not match header
+""".strip()
+    )
+
+    table = read_su2_table(volume_path)
+
+    assert table["design_id"].shape == (1,)
+    assert np.isnan(table["design_id"][0])
+    assert table["dc1"][0] == pytest.approx(-0.0172)
+    assert np.isnan(table["Cl"][0])
+
+
 def test_build_field_tensor_stacks_and_reshapes(tmp_path: Path):
     volume_path = tmp_path / "volume.dat"
     volume_path.write_text(
