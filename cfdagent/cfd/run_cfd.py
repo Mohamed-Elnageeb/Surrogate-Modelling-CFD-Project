@@ -6,6 +6,9 @@ import subprocess
 import csv
 import shutil
 import re
+from typing import Iterable
+
+from .postprocess import extract_metrics
 
 
 @dataclass
@@ -166,6 +169,74 @@ def main() -> None:
     )
     print("History file:", result["history_path"])
     print("Last row:", result["history_data"])
+
+
+def _extract_first(history: dict, *keys: str):
+    for key in keys:
+        if key in history:
+            value = history[key]
+            if value is None or value == "":
+                continue
+            return value
+    return None
+
+
+def run_cfd(
+    design_id: str,
+    design_vec: Iterable[float],
+    workdir: Path | None = None,
+    su2_executable: str | None = None,
+) -> dict:
+    """
+    Lightweight convenience wrapper for running a single SU2 case.
+
+    The helper mirrors the legacy ``run_cfd`` interface that higher-level
+    scripts import. It delegates to :func:`run_su2_case` using the default
+    ``cfdagent/cfd/base_case`` directory (unless ``workdir`` is provided),
+    and returns a dictionary containing lift/drag metrics plus a success flag.
+
+    Args:
+        design_id: Identifier for the design being evaluated (used for logging).
+        design_vec: Ten-parameter design vector. It is accepted for API
+            compatibility but not manipulated inside this helper; callers can
+            persist it alongside the returned metrics if needed.
+        workdir: Optional path to a prepared SU2 case directory.
+        su2_executable: Optional override for the SU2 binary name/path.
+    """
+
+    case_dir = workdir or (Path(__file__).resolve().parent / "base_case")
+    cfg = Su2RunConfig(workdir=case_dir)
+    if su2_executable:
+        cfg.su2_executable = su2_executable
+
+    try:
+        result = run_su2_case(cfg)
+        history = result.get("history_data") or {}
+        metrics = extract_metrics(result.get("history_path")) if result.get("history_path") else {}
+
+        return {
+            "design_id": design_id,
+            "design_vec": list(design_vec),
+            "Cl": metrics.get("Cl") if metrics else _extract_first(history, "CL", "CLtot", "cl", "Cl"),
+            "Cd": metrics.get("Cd") if metrics else _extract_first(history, "CD", "CDtot", "cd", "Cd"),
+            "residual": metrics.get("residual") if metrics else _extract_first(history, "RMS_RES", "RMS_DENSITY", "residual"),
+            "success": True,
+            "history_data": history,
+            "stdout": result.get("stdout"),
+            "stderr": result.get("stderr"),
+            "config_path": result.get("config_path"),
+            "history_path": result.get("history_path"),
+        }
+    except Exception as exc:  # pylint: disable=broad-except
+        return {
+            "design_id": design_id,
+            "design_vec": list(design_vec),
+            "Cl": None,
+            "Cd": None,
+            "residual": None,
+            "success": False,
+            "error": str(exc),
+        }
 
 
 if __name__ == "__main__":
