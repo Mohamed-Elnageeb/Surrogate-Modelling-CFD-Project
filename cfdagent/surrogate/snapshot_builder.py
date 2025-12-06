@@ -57,7 +57,11 @@ def read_su2_table(path: Path) -> Dict[str, np.ndarray]:
         ValueError if the file has no header, inconsistent columns, or no data.
     """
 
-    lines = path.read_text(encoding="utf-8").splitlines()
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        text = path.read_text(encoding="latin-1")
+    lines = text.splitlines()
 
     header_fields: list[str] | None = None
     data_rows: list[list[float]] = []
