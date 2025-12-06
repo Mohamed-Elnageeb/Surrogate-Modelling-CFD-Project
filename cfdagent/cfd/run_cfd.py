@@ -52,9 +52,12 @@ def create_modified_config(base_cfg: Path, out_cfg: Path, param_overrides: dict[
 
 def parse_history_file(path: Path) -> dict:
     """
-    Parse a SU2 history file (.csv or .dat).
-    Return the last meaningful data row as a dict.
-    If the file does not exist or is empty, return {}.
+    Parse a SU2 history file (.csv or .dat) and return the last data row.
+
+    The parser tolerates trailing delimiters and both comma- and whitespace-
+    separated tables, which occur across SU2 versions. Comment/blank lines are
+    skipped. If the file does not exist or no data rows are present, an empty
+    dict is returned.
     """
 
     if not path or not path.exists():
@@ -66,15 +69,24 @@ def parse_history_file(path: Path) -> dict:
     if not data_lines:
         return {}
 
-    reader = csv.reader(data_lines)
-    header = next(reader, None)
+    def split_line(line: str) -> list[str]:
+        stripped = line.strip()
+        if "," in stripped:
+            return [tok for tok in stripped.split(",") if tok != ""]
+        return [tok for tok in re.split(r"\s+", stripped) if tok != ""]
+
+    header = split_line(data_lines[0])
     if not header:
         return {}
 
     last_row: list[str] | None = None
-    for row in reader:
-        if row:
-            last_row = row
+    for line in data_lines[1:]:
+        row = split_line(line)
+        if not row:
+            continue
+        # Ignore extra trailing tokens and pad missing ones with empty strings
+        row = (row + [""] * len(header))[: len(header)]
+        last_row = row
 
     if not last_row:
         return {}
