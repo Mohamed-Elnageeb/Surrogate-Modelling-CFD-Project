@@ -31,7 +31,10 @@ def _is_comment_or_empty(line: str) -> bool:
 
 
 def _split_line(line: str) -> list[str]:
-    return [token.strip() for token in line.split(",")] if "," in line else line.split()
+    tokens = [token.strip() for token in line.split(",")] if "," in line else line.split()
+    # Some SU2 tables include trailing delimiters that yield empty tokens; drop them so
+    # row-length validation does not incorrectly fail.
+    return [tok for tok in tokens if tok]
 
 
 def read_su2_table(path: Path) -> Dict[str, np.ndarray]:
@@ -57,7 +60,11 @@ def read_su2_table(path: Path) -> Dict[str, np.ndarray]:
         ValueError if the file has no header, inconsistent columns, or no data.
     """
 
-    lines = path.read_text(encoding="utf-8").splitlines()
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        text = path.read_text(encoding="latin-1")
+    lines = text.splitlines()
 
     header_fields: list[str] | None = None
     data_rows: list[list[float]] = []

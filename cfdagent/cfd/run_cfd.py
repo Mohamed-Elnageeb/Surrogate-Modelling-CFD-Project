@@ -52,9 +52,12 @@ def create_modified_config(base_cfg: Path, out_cfg: Path, param_overrides: dict[
 
 def parse_history_file(path: Path) -> dict:
     """
-    Parse a SU2 history file (.csv or .dat).
-    Return the last meaningful data row as a dict.
-    If the file does not exist or is empty, return {}.
+    Parse a SU2 history file (.csv or .dat) and return the last data row.
+
+    The parser tolerates trailing delimiters and both comma- and whitespace-
+    separated tables, which occur across SU2 versions. Comment/blank lines are
+    skipped. If the file does not exist or no data rows are present, an empty
+    dict is returned.
     """
 
     if not path or not path.exists():
@@ -66,15 +69,24 @@ def parse_history_file(path: Path) -> dict:
     if not data_lines:
         return {}
 
-    reader = csv.reader(data_lines)
-    header = next(reader, None)
+    def split_line(line: str) -> list[str]:
+        stripped = line.strip()
+        if "," in stripped:
+            return [tok for tok in stripped.split(",") if tok != ""]
+        return [tok for tok in re.split(r"\s+", stripped) if tok != ""]
+
+    header = split_line(data_lines[0])
     if not header:
         return {}
 
     last_row: list[str] | None = None
-    for row in reader:
-        if row:
-            last_row = row
+    for line in data_lines[1:]:
+        row = split_line(line)
+        if not row:
+            continue
+        # Ignore extra trailing tokens and pad missing ones with empty strings
+        row = (row + [""] * len(header))[: len(header)]
+        last_row = row
 
     if not last_row:
         return {}
@@ -181,6 +193,35 @@ def _extract_first(history: dict, *keys: str):
     return None
 
 
+def _config_value(cfg_path: Path, key: str, default: str | None = None) -> str | None:
+    """Return the value assigned to ``key`` in a SU2 config, if present."""
+
+    if not cfg_path.exists():
+        return default
+
+    pattern = re.compile(rf"^{re.escape(key)}\s*=\s*(.+)$")
+    for line in cfg_path.read_text().splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("%"):
+            continue
+        match = pattern.match(stripped)
+        if match:
+            return match.group(1).strip()
+    return default
+
+
+def _latest_output(workdir: Path, stem: str) -> Path | None:
+    """Find the newest output file matching a given stem in ``workdir``."""
+
+    extensions = (".csv", ".dat", ".vtu", ".vtk", ".su2", ".txt")
+    candidates = list(workdir.glob(f"{stem}*"))
+    candidates = [c for c in candidates if c.suffix in extensions]
+    if not candidates:
+        return None
+
+    return max(candidates, key=lambda p: p.stat().st_mtime)
+
+
 def _ensure_base_case_files(case_dir: Path, base_config_name: str) -> list[str]:
     """Ensure the base-case config and mesh exist, attempting to auto-populate.
 
@@ -254,6 +295,9 @@ def run_cfd(
     if su2_executable:
         cfg.su2_executable = su2_executable
 
+    volume_stem = _config_value(case_dir / cfg.base_config_name, "VOLUME_FILENAME", "flow_fields")
+    surface_stem = _config_value(case_dir / cfg.base_config_name, "SURFACE_FILENAME", "surface_airfoil")
+
     missing_reqs = _ensure_base_case_files(case_dir, cfg.base_config_name)
 
     su2_path = shutil.which(cfg.su2_executable)
@@ -278,18 +322,34 @@ def run_cfd(
         history = result.get("history_data") or {}
         metrics = extract_metrics(result.get("history_path")) if result.get("history_path") else {}
 
+        cl = metrics.get("Cl") if metrics else None
+        cd = metrics.get("Cd") if metrics else None
+        residual = metrics.get("residual") if metrics else None
+
+        if cl is None:
+            cl = _extract_first(history, "CL", "CLtot", "cl", "Cl")
+        if cd is None:
+            cd = _extract_first(history, "CD", "CDtot", "cd", "Cd")
+        if residual is None:
+            residual = _extract_first(history, "RMS_RES", "RMS_DENSITY", "residual")
+
+        volume_output = _latest_output(case_dir, volume_stem or "flow_fields")
+        surface_output = _latest_output(case_dir, surface_stem or "surface_airfoil")
+
         return {
             "design_id": design_id,
             "design_vec": list(design_vec),
-            "Cl": metrics.get("Cl") if metrics else _extract_first(history, "CL", "CLtot", "cl", "Cl"),
-            "Cd": metrics.get("Cd") if metrics else _extract_first(history, "CD", "CDtot", "cd", "Cd"),
-            "residual": metrics.get("residual") if metrics else _extract_first(history, "RMS_RES", "RMS_DENSITY", "residual"),
+            "Cl": cl,
+            "Cd": cd,
+            "residual": residual,
             "success": True,
             "history_data": history,
             "stdout": result.get("stdout"),
             "stderr": result.get("stderr"),
             "config_path": result.get("config_path"),
             "history_path": result.get("history_path"),
+            "volume_output": volume_output,
+            "surface_output": surface_output,
         }
     except Exception as exc:  # pylint: disable=broad-except
         return {
