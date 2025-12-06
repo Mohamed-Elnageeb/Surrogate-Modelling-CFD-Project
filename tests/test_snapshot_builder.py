@@ -71,17 +71,39 @@ x, y, p
     assert table["p"].tolist() == [1.0, 2.0]
 
 
-def test_read_su2_table_rejects_extra_numeric_columns(tmp_path: Path):
+def test_read_su2_table_pads_and_trims_rows(tmp_path: Path):
     volume_path = tmp_path / "volume.dat"
     volume_path.write_text(
         """
 x, y, p
-0.0, 0.0, 1.0, 4.0
+0.0, 0.0
+1.0, 0.0, 2.0, 4.0, 5.0
 """.strip()
     )
 
-    with pytest.raises(ValueError, match="Row column count does not match header"):
-        read_su2_table(volume_path)
+    table = read_su2_table(volume_path)
+
+    assert table["x"].tolist() == [0.0, 1.0]
+    assert table["y"].tolist() == [0.0, 0.0]
+    assert np.isnan(table["p"][0])
+    assert table["p"][1] == pytest.approx(2.0)
+
+
+def test_read_su2_table_handles_non_numeric_and_missing_values(tmp_path: Path):
+    volume_path = tmp_path / "volume.dat"
+    volume_path.write_text(
+        """
+design_id,dc1,dc2,dc3,dc4,dc5,dt1,dt2,dt3,dt4,dt5,Cl,Cd,residual,success,error,snapshot_error
+34eb1a35,-0.0172,0.0003,-0.0194,-0.0005,-0.0149,0.0079,0.0079,-0.0149,0.0064,0.0121,,,,True,,Row column count does not match header
+""".strip()
+    )
+
+    table = read_su2_table(volume_path)
+
+    assert table["design_id"].shape == (1,)
+    assert np.isnan(table["design_id"][0])
+    assert table["dc1"][0] == pytest.approx(-0.0172)
+    assert np.isnan(table["Cl"][0])
 
 
 def test_build_field_tensor_stacks_and_reshapes(tmp_path: Path):
