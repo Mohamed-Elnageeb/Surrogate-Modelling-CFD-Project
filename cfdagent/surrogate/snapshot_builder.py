@@ -30,7 +30,18 @@ def _is_comment_or_empty(line: str) -> bool:
     return not stripped or stripped.startswith(("#", "%"))
 
 
+def _strip_inline_comment(line: str) -> str:
+    """Remove trailing inline comments introduced with '#' or '%'."""
+
+    for marker in ("#", "%"):
+        comment_idx = line.find(marker)
+        if comment_idx != -1:
+            return line[:comment_idx]
+    return line
+
+
 def _split_line(line: str) -> list[str]:
+    line = _strip_inline_comment(line)
     tokens = [token.strip() for token in line.split(",")] if "," in line else line.split()
     # Some SU2 tables include trailing delimiters that yield empty tokens; drop them so
     # row-length validation does not incorrectly fail.
