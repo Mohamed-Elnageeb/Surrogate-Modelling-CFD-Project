@@ -91,10 +91,25 @@ def read_su2_table(path: Path) -> Dict[str, np.ndarray]:
             continue
 
         tokens = _split_line(line)
-        if len(tokens) != len(header_fields):
+
+        numeric_tokens: list[str] = []
+        first_non_numeric_found = False
+        for tok in tokens:
+            try:
+                float(tok)
+            except ValueError:
+                first_non_numeric_found = True
+                break
+            numeric_tokens.append(tok)
+
+        if len(numeric_tokens) < len(header_fields):
             raise ValueError("Row column count does not match header")
+        if len(numeric_tokens) > len(header_fields) and not first_non_numeric_found:
+            raise ValueError("Row column count does not match header")
+
+        row_tokens = numeric_tokens[: len(header_fields)]
         try:
-            row = [float(tok) for tok in tokens]
+            row = [float(tok) for tok in row_tokens]
         except ValueError as exc:  # pragma: no cover - defensive
             raise ValueError("Non-numeric value encountered") from exc
         data_rows.append(row)
