@@ -30,11 +30,24 @@ def _is_comment_or_empty(line: str) -> bool:
     return not stripped or stripped.startswith(("#", "%"))
 
 
-def _split_line(line: str) -> list[str]:
-    tokens = [token.strip() for token in line.split(",")] if "," in line else line.split()
-    # Some SU2 tables include trailing delimiters that yield empty tokens; drop them so
-    # row-length validation does not incorrectly fail.
-    return [tok for tok in tokens if tok]
+def _strip_inline_comment(line: str) -> str:
+    """Remove trailing inline comments introduced with '#' or '%'"""
+
+    for marker in ("#", "%"):
+        comment_idx = line.find(marker)
+        if comment_idx != -1:
+            return line[:comment_idx]
+    return line
+
+
+def _tokenize_line(line: str, delimiter: str) -> list[str]:
+    """Split a line using a known delimiter while preserving empty tokens."""
+
+    line = _strip_inline_comment(line)
+    if delimiter == ",":
+        # Preserve positional empties so we can accurately align with the header.
+        return [token.strip() for token in line.split(",")]
+    return line.split()
 
 
 def read_su2_table(path: Path) -> Dict[str, np.ndarray]:
@@ -67,37 +80,61 @@ def read_su2_table(path: Path) -> Dict[str, np.ndarray]:
     lines = text.splitlines()
 
     header_fields: list[str] | None = None
-    data_rows: list[list[float]] = []
+    delimiter: str = ","
+    columns: dict[str, list[float]] | None = None
 
-    for line in lines:
+    for idx, line in enumerate(lines, start=1):
         if _is_comment_or_empty(line):
             continue
 
         if header_fields is None:
-            header_fields = _split_line(line)
+            header_fields = _tokenize_line(line, ",")
+            # Use the header to decide whether the file is comma- or whitespace-separated.
+            delimiter = "," if "," in line else ""
+            if delimiter == "":
+                delimiter = " "
+                header_fields = line.split()
             if not header_fields:
                 raise ValueError(f"No header found in table: {path}")
+            columns = {name: [] for name in header_fields}
             continue
 
-        tokens = _split_line(line)
-        if len(tokens) != len(header_fields):
-            raise ValueError("Row column count does not match header")
-        try:
-            row = [float(tok) for tok in tokens]
-        except ValueError as exc:  # pragma: no cover - defensive
-            raise ValueError("Non-numeric value encountered") from exc
-        data_rows.append(row)
+        tokens = _tokenize_line(line, delimiter)
+
+        # Align row tokens with the header length. Extra tokens are ignored, and missing
+        # tokens are filled with NaN so downstream consumers can decide how to handle
+        # incomplete rows without the parser failing outright.
+        if len(tokens) < len(header_fields):
+            print(
+                f"Row {idx} in {path} has {len(tokens)} columns but {len(header_fields)} expected; padding with empty values"
+            )
+            tokens = tokens + [""] * (len(header_fields) - len(tokens))
+        elif len(tokens) > len(header_fields):
+            print(
+                f"Row {idx} in {path} has {len(tokens)} columns but {len(header_fields)} expected; truncating extra tokens"
+            )
+            tokens = tokens[: len(header_fields)]
+
+        for name, tok in zip(header_fields, tokens):
+            tok = tok.strip()
+            try:
+                value = float(tok)
+            except ValueError:
+                if tok != "":
+                    print(
+                        f"Row {idx} column '{name}' in {path} is non-numeric token '{tok}'; converting to NaN"
+                    )
+                value = np.nan if tok == "" else np.nan
+            columns[name].append(value)
 
     if header_fields is None:
+        print(f"No header found in table: {path}")
         raise ValueError(f"No header found in table: {path}")
-    if not data_rows:
+    if columns is None or not any(columns.values()):
+        print(f"No data found in table: {path}")
         raise ValueError(f"No data found in table: {path}")
 
-    data = np.asarray(data_rows, dtype=float)
-    table: Dict[str, np.ndarray] = {}
-    for idx, name in enumerate(header_fields):
-        table[name] = data[:, idx]
-    return table
+    return {name: np.asarray(values, dtype=float) for name, values in columns.items()}
 
 
 def build_field_tensor(
