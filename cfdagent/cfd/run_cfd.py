@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
 import subprocess
 import csv
 import shutil
 import re
 from typing import Iterable
+from dataclasses import dataclass
+from pathlib import Path
 
 from .postprocess import extract_metrics
 
@@ -181,6 +181,51 @@ def _extract_first(history: dict, *keys: str):
     return None
 
 
+def _ensure_base_case_files(case_dir: Path, base_config_name: str) -> list[str]:
+    """Ensure the base-case config and mesh exist, attempting to auto-populate.
+
+    This helper tries to copy assets from ``TestCases/airfoil_naca0012_opt`` and,
+    if necessary, run ``SU2_GEO`` to generate a mesh from ``mesh_config.cfg``.
+    Returns a list of missing-requirement messages (empty if all files exist).
+    """
+
+    missing: list[str] = []
+    base_cfg = case_dir / base_config_name
+    mesh_file = case_dir / "mesh.su2"
+
+    repo_root = Path(__file__).resolve().parents[2]
+    fallback_case = repo_root / "TestCases" / "airfoil_naca0012_opt"
+    fallback_cfg = fallback_case / "config.cfg"
+    fallback_mesh_cfg = fallback_case / "mesh_config.cfg"
+
+    if not base_cfg.exists() and fallback_cfg.exists():
+        base_cfg.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(fallback_cfg, base_cfg)
+
+    if not mesh_file.exists():
+        generated_mesh = fallback_case / "mesh.su2"
+        if generated_mesh.exists():
+            mesh_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(generated_mesh, mesh_file)
+        elif fallback_mesh_cfg.exists():
+            try:
+                subprocess.run(["SU2_GEO", str(fallback_mesh_cfg)], cwd=fallback_case, check=True)
+                if generated_mesh.exists():
+                    mesh_file.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy(generated_mesh, mesh_file)
+            except FileNotFoundError:
+                missing.append("SU2_GEO not found. Install SU2 or provide mesh.su2 in base_case.")
+            except subprocess.CalledProcessError as exc:  # pragma: no cover - external tool
+                missing.append(f"SU2_GEO failed with code {exc.returncode} while generating mesh.")
+
+    if not base_cfg.exists():
+        missing.append(f"Missing SU2 base config: {base_cfg}")
+    if not mesh_file.exists():
+        missing.append(f"Missing SU2 mesh file: {mesh_file}")
+
+    return missing
+
+
 def run_cfd(
     design_id: str,
     design_vec: Iterable[float],
@@ -209,14 +254,7 @@ def run_cfd(
     if su2_executable:
         cfg.su2_executable = su2_executable
 
-    base_cfg = case_dir / cfg.base_config_name
-    mesh_file = case_dir / "mesh.su2"
-
-    missing_reqs: list[str] = []
-    if not base_cfg.exists():
-        missing_reqs.append(f"Missing SU2 base config: {base_cfg}")
-    if not mesh_file.exists():
-        missing_reqs.append(f"Missing SU2 mesh file: {mesh_file}")
+    missing_reqs = _ensure_base_case_files(case_dir, cfg.base_config_name)
 
     su2_path = shutil.which(cfg.su2_executable)
     if not su2_path:
