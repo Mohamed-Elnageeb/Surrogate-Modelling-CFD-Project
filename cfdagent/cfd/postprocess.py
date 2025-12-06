@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Any, Dict
 import csv
+import numpy as np
 
 def extract_metrics(history_file: Path) -> Dict[str, Any]:
     """
@@ -34,7 +35,41 @@ def extract_metrics(history_file: Path) -> Dict[str, Any]:
 
 def save_flowfield(solution_dir: Path, out_path: Path) -> None:
     """
-    Placeholder to parse SU2 solution files, sample onto a fixed grid,
-    and save arrays to out_path as .npz. Not implemented in Phase 0.
+    Aggregate CSV-based solution exports into a compressed ``.npz`` archive.
+
+    The helper looks for CSV files inside ``solution_dir`` (e.g. SU2 PARAVIEW
+    exports) and stores every numeric column as an array in ``out_path``. File
+    stems are prefixed to the column names to avoid collisions.
     """
-    raise NotImplementedError("flowfield extraction not implemented yet")
+    solution_dir = Path(solution_dir)
+    if not solution_dir.exists():
+        raise FileNotFoundError(f"Solution directory not found: {solution_dir}")
+
+    arrays: Dict[str, Any] = {}
+    csv_files = sorted(solution_dir.glob("*.csv"))
+    if not csv_files:
+        raise FileNotFoundError(f"No CSV solution files found in {solution_dir}")
+
+    for csv_file in csv_files:
+        with csv_file.open("r", newline="") as f:
+            reader = csv.DictReader(f)
+            columns: Dict[str, list[float]] = {}
+            for row in reader:
+                for key, value in row.items():
+                    if value is None or value == "":
+                        continue
+                    try:
+                        numeric_value = float(value)
+                    except ValueError:
+                        # Skip non-numeric columns silently.
+                        continue
+                    columns.setdefault(key, []).append(numeric_value)
+
+        for col_name, values in columns.items():
+            arrays[f"{csv_file.stem}_{col_name}"] = np.asarray(values, dtype=np.float32)
+
+    if not arrays:
+        raise ValueError(f"No numeric columns found while parsing {solution_dir}")
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(out_path, **arrays)
