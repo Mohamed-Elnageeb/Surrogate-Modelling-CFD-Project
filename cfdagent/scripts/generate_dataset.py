@@ -27,9 +27,14 @@ def main():
             "residual": result.get("residual"),
             "success": result.get("success", False),
         })
+        if not row["success"] and result.get("error"):
+            row["error"] = result.get("error")
 
         append_design_result(row)
-        print(f"[{i+1}/{args.n_samples}] design_id={design_id} success={row['success']}")
+        status = f"[{i+1}/{args.n_samples}] design_id={design_id} success={row['success']}"
+        if not row["success"] and result.get("error"):
+            status += f" error={result['error']}"
+        print(status)
 
 
 if __name__ == "__main__":
