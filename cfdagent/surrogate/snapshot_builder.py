@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Dict, Sequence, Tuple
 
 import numpy as np
+import pandas as pd
 
 
 @dataclass
@@ -163,6 +164,80 @@ def read_su2_table(path: Path) -> Dict[str, np.ndarray]:
     return {name: np.asarray(values, dtype=float) for name, values in columns.items()}
 
 
+def _load_vtu_table(path: Path) -> Dict[str, np.ndarray]:
+    """Parse a VTU file into a flat dict of point-data arrays.
+
+    MeshIO is used at runtime (imported lazily) so that environments which do not
+    need VTU support do not pay the import cost.
+    """
+
+    try:
+        import meshio
+    except ImportError as exc:  # pragma: no cover - exercised in integration
+        raise ImportError("meshio is required to read VTU files") from exc
+
+    mesh = meshio.read(path)
+    table: Dict[str, np.ndarray] = {}
+
+    for name, array in mesh.point_data.items():
+        data = np.asarray(array)
+        if data.ndim == 1:
+            table[name] = data.astype(float)
+            continue
+
+        if data.ndim == 2:
+            # Expose each component separately, both generically (name_0, name_1)
+            # and with common aliases for velocity-like vectors.
+            for idx in range(data.shape[1]):
+                table[f"{name}_{idx}"] = data[:, idx].astype(float)
+
+            lower = name.lower()
+            if lower in {"velocity", "momentum"}:
+                component_names = ("u", "v", "w")
+                for idx, comp in enumerate(component_names):
+                    if idx < data.shape[1]:
+                        table[comp] = data[:, idx].astype(float)
+            continue
+
+        # Skip higher dimensional arrays; they are unlikely to be scalar fields.
+
+    return table
+
+
+def _load_volume_table(volume_solution: Path) -> Dict[str, np.ndarray]:
+    if volume_solution.suffix.lower() == ".vtu":
+        return _load_vtu_table(volume_solution)
+    return read_su2_table(volume_solution)
+
+
+def _load_history_forces(history_path: Path, cl_name: str, cd_name: str) -> Tuple[float, float]:
+    if not history_path.exists():
+        raise FileNotFoundError(f"History file not found: {history_path}")
+
+    df = pd.read_csv(history_path)
+    if df.empty:
+        raise ValueError(f"History file is empty: {history_path}")
+    for col in (cl_name, cd_name):
+        if col not in df.columns:
+            raise KeyError(f"Missing column '{col}' in history file {history_path}")
+
+    last_row = df.iloc[-1]
+    return float(last_row[cl_name]), float(last_row[cd_name])
+
+
+def _load_force_values(
+    surface_forces: Path | None,
+    history_path: Path,
+    cl_name: str,
+    cd_name: str,
+) -> Tuple[float, float]:
+    if surface_forces is not None:
+        surf_table = read_su2_table(surface_forces)
+        return extract_forces(surf_table, cl_name, cd_name)
+
+    return _load_history_forces(history_path, cl_name, cd_name)
+
+
 def build_field_tensor(
     table: Dict[str, np.ndarray],
     field_names: Sequence[str],
@@ -235,16 +310,19 @@ def extract_forces(
 
 def su2_to_unet_snapshot(
     volume_solution: Path,
-    surface_forces: Path,
+    surface_forces: Path | None,
     out_path: Path,
     cfg: SnapshotConfig,
+    history_path: Path | None = None,
 ) -> None:
     """
     Convert SU2-style volume and surface solution files into a UNet snapshot .npz file.
 
     This reads:
-    * 'volume_solution' as a SU2-style table with the flowfield variables.
-    * 'surface_forces' as a SU2-style table with CL / CD columns.
+    * 'volume_solution' as a SU2-style table with the flowfield variables or a VTU
+      file containing point data.
+    * 'surface_forces' as a SU2-style table with CL / CD columns when provided, or
+      falls back to reading the last row of a 'history.csv' file.
 
     It then:
 
@@ -260,12 +338,13 @@ def su2_to_unet_snapshot(
         - 'cd'
     """
 
-    vol_table = read_su2_table(volume_solution)
-    surf_table = read_su2_table(surface_forces)
+    vol_table = _load_volume_table(volume_solution)
+
+    history_csv = history_path if history_path is not None else volume_solution.parent / "history.csv"
+    cl, cd = _load_force_values(surface_forces, history_csv, cfg.cl_name, cfg.cd_name)
 
     inputs = build_field_tensor(vol_table, cfg.input_fields, cfg.grid_shape)
     target_fields = build_field_tensor(vol_table, cfg.target_fields, cfg.grid_shape)
-    cl, cd = extract_forces(surf_table, cfg.cl_name, cfg.cd_name)
 
     np.savez(
         out_path,
