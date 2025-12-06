@@ -209,6 +209,32 @@ def run_cfd(
     if su2_executable:
         cfg.su2_executable = su2_executable
 
+    base_cfg = case_dir / cfg.base_config_name
+    mesh_file = case_dir / "mesh.su2"
+
+    missing_reqs: list[str] = []
+    if not base_cfg.exists():
+        missing_reqs.append(f"Missing SU2 base config: {base_cfg}")
+    if not mesh_file.exists():
+        missing_reqs.append(f"Missing SU2 mesh file: {mesh_file}")
+
+    su2_path = shutil.which(cfg.su2_executable)
+    if not su2_path:
+        missing_reqs.append(
+            f"SU2 executable '{cfg.su2_executable}' not found in PATH."
+        )
+
+    if missing_reqs:
+        return {
+            "design_id": design_id,
+            "design_vec": list(design_vec),
+            "Cl": None,
+            "Cd": None,
+            "residual": None,
+            "success": False,
+            "error": "; ".join(missing_reqs),
+        }
+
     try:
         result = run_su2_case(cfg)
         history = result.get("history_data") or {}
