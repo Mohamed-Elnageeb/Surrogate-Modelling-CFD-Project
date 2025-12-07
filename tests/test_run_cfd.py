@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import importlib
@@ -151,6 +152,28 @@ def test_run_cfd_flags_missing_metrics(monkeypatch: pytest.MonkeyPatch, tmp_path
     assert result["success"] is False
 
 
+def test_run_cfd_forwards_param_overrides(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    base_cfg = tmp_path / "config.cfg"
+    base_cfg.write_text("MACH_NUMBER= 0.1\nAOA= 2.0\n")
+    (tmp_path / "mesh.su2").write_text("")
+
+    monkeypatch.setattr(run_cfd_module.shutil, "which", lambda name: "/usr/bin/SU2_CFD")
+
+    received_overrides: list[dict[str, float | int | str] | None] = []
+
+    def fake_run(cfg, param_overrides=None):  # pragma: no cover - simple stub
+        received_overrides.append(param_overrides)
+        return {"history_data": {}, "history_path": None, "stdout": "", "stderr": "", "config_path": base_cfg}
+
+    monkeypatch.setattr(run_cfd_module, "run_su2_case", fake_run)
+    monkeypatch.setattr(run_cfd_module, "extract_metrics", lambda _: {})
+
+    overrides = {"MACH_NUMBER": 0.15, "AOA": 5.0}
+    _ = run_cfd(design_id="abc", design_vec=[0.0] * 10, workdir=tmp_path, su2_executable="SU2_CFD", param_overrides=overrides)
+
+    assert received_overrides == [overrides]
+
+
 def test_latest_output_prefers_text_formats(tmp_path: Path) -> None:
     csv_file = tmp_path / "flow_fields.csv"
     vtu_file = tmp_path / "flow_fields.vtu"
@@ -159,7 +182,7 @@ def test_latest_output_prefers_text_formats(tmp_path: Path) -> None:
     vtu_file.write_text("<VTKFile></VTKFile>")
 
     csv_mtime = csv_file.stat().st_mtime
-    vtu_file.utime((csv_mtime + 10, csv_mtime + 10))
+    os.utime(vtu_file, (csv_mtime + 10, csv_mtime + 10))
 
     latest = run_cfd_module._latest_output(tmp_path, "flow_fields")
     assert latest == csv_file

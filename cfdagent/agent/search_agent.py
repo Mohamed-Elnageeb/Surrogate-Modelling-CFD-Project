@@ -34,7 +34,10 @@ from ..utils.snapshot_pipeline import (
 from ..utils.io_utils import DESIGN_LOG
 
 DesignVector = Sequence[float]
-RunFunction = Callable[[str, Iterable[float], Path | None, str | None], dict]
+RunFunction = Callable[
+    [str, Iterable[float], Path | None, str | None, dict[str, float | int | str] | None],
+    dict,
+]
 
 
 @dataclass

@@ -59,6 +59,10 @@ class CFDDataset(Dataset):
                     if status not in {"success", "ok", "completed", ""}:
                         continue
 
+                    # Skip rows that explicitly reported a snapshot creation failure.
+                    if row.get("snapshot_error"):
+                        continue
+
                     flow_path = row.get("flow_path") or row.get("flowfile") or row.get("flow")
                     if flow_path is None:
                         continue
@@ -103,7 +107,10 @@ class CFDDataset(Dataset):
         if not path.exists():
             raise FileNotFoundError(f"Flowfield file not found: {path}")
 
-        data = np.load(path)
+        try:
+            data = np.load(path)
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(f"Failed to load flowfield file {path}: {exc}") from exc
         if isinstance(data, np.lib.npyio.NpzFile):
             if "flow" in data:
                 flow_array = data["flow"]
