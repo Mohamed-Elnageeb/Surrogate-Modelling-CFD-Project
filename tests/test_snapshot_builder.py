@@ -108,7 +108,7 @@ def test_read_su2_table_handles_non_numeric_and_missing_values(tmp_path: Path):
     volume_path = tmp_path / "volume.dat"
     volume_path.write_text(
         """
-design_id,dc1,dc2,dc3,dc4,dc5,dt1,dt2,dt3,dt4,dt5,Cl,Cd,residual,success,error,snapshot_error
+design_id,dc1,dc2,dc3,dc4,dc5,dt1,dt2,dt3,dt4,dt5,Cl,Cd,success,error,snapshot_error
 34eb1a35,-0.0172,0.0003,-0.0194,-0.0005,-0.0149,0.0079,0.0079,-0.0149,0.0064,0.0121,,,,True,,Row column count does not match header
 """.strip()
     )

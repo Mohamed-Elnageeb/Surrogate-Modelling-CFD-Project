@@ -14,3 +14,16 @@ def test_extract_metrics_handles_quoted_headers(tmp_path: Path) -> None:
     metrics = extract_metrics(history)
 
     assert metrics == {"Cl": 0.242, "Cd": 0.177, "residual": None}
+
+
+def test_extract_metrics_discards_negative_coefficients(tmp_path: Path) -> None:
+    history = tmp_path / "history.csv"
+    history.write_text(
+        """CL,CD
+-0.01,-0.02
+"""
+    )
+
+    metrics = extract_metrics(history)
+
+    assert metrics == {"Cl": None, "Cd": None, "residual": None}
