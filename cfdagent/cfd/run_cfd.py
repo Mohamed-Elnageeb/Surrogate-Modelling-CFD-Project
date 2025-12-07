@@ -305,13 +305,18 @@ def run_cfd(
         volume_output = _latest_output(case_dir, volume_stem or "flow_fields")
         surface_output = _latest_output(case_dir, surface_stem or "surface_airfoil")
 
+        missing_metrics = [name for name, value in {"Cl": cl, "Cd": cd}.items() if value is None]
+        success = not missing_metrics
+        error_msg = f"Missing {','.join(missing_metrics)} metrics" if missing_metrics else None
+
         return {
             "design_id": design_id,
             "design_vec": list(design_vec),
             "Cl": cl,
             "Cd": cd,
             "residual": residual,
-            "success": True,
+            "success": success,
+            "error": error_msg,
             "history_data": history,
             "stdout": result.get("stdout"),
             "stderr": result.get("stderr"),

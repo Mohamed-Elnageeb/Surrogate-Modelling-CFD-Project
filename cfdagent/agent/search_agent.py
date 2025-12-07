@@ -176,7 +176,10 @@ class AirfoilDesignAgent:
         self.design_log.parent.mkdir(parents=True, exist_ok=True)
         if self.design_log.exists():
             df = pd.read_csv(self.design_log)
-            df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+            if df.empty:
+                df = pd.DataFrame([row])
+            else:
+                df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
         else:
             df = pd.DataFrame([row])
         df.to_csv(self.design_log, index=False)

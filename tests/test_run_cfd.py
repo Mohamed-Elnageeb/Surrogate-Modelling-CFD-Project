@@ -2,14 +2,18 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+import importlib
 import subprocess
 
 import pytest
+
+run_cfd_module = importlib.import_module("cfdagent.cfd.run_cfd")
 
 from cfdagent.cfd.run_cfd import (
     Su2RunConfig,
     create_modified_config,
     parse_history_file,
+    run_cfd,
     run_su2_case,
 )
 
@@ -125,3 +129,23 @@ def test_run_su2_case_raises_on_nonzero_return(monkeypatch: pytest.MonkeyPatch, 
     cfg = Su2RunConfig(workdir=tmp_path)
     with pytest.raises(RuntimeError):
         run_su2_case(cfg)
+
+
+def test_run_cfd_flags_missing_metrics(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    base_cfg = tmp_path / "config.cfg"
+    base_cfg.write_text("VOLUME_FILENAME=flow\nSURFACE_FILENAME=surface\n")
+    (tmp_path / "mesh.su2").write_text("")
+
+    monkeypatch.setattr(run_cfd_module.shutil, "which", lambda name: "/usr/bin/SU2_CFD")
+
+    def fake_run(cfg):  # pragma: no cover - simple stub
+        return {"history_data": {}, "history_path": None, "stdout": "", "stderr": "", "config_path": base_cfg}
+
+    monkeypatch.setattr(run_cfd_module, "run_su2_case", fake_run)
+    monkeypatch.setattr(run_cfd_module, "extract_metrics", lambda _: {})
+
+    result = run_cfd(design_id="abc", design_vec=[0.0] * 10, workdir=tmp_path, su2_executable="SU2_CFD")
+
+    assert result["Cl"] is None and result["Cd"] is None
+    assert result["error"]
+    assert result["success"] is False
