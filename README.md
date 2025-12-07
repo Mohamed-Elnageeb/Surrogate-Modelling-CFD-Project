@@ -11,7 +11,7 @@ solver while a physics-aware U‑Net accelerates design exploration.
 - `cfdagent/geometry/`: Sampling utilities that convert 10‑D design vectors
   into airfoil surface coordinates.
 - `cfdagent/cfd/`: Thin wrappers around SU2 execution plus post-processing
-  helpers.
+  helpers built around the canonical `TestCases/airfoil_naca0012_opt` setup.
 - `cfdagent/surrogate/`: Dataset loader, UNet model definitions, and training
   CLI entry points.
 - `cfdagent/optimizer/`: A light random-search loop suitable for early-phase
@@ -20,11 +20,9 @@ solver while a physics-aware U‑Net accelerates design exploration.
 ## Getting started
 
 1. **Install SU2** and ensure the `SU2_CFD` binary is on your `PATH`.
-2. **Prepare a base case** by placing a working 2‑D airfoil mesh and
-   configuration inside `cfdagent/cfd/base_case` as `mesh.su2` and `config.cfg`.
-   The repository already includes a baseline NACA 0012 setup (copied from
-   `TestCases/airfoil_naca0012_opt`) so you can run the dataset script out of
-   the box.
+2. **Use the bundled canonical case**: simulations default to the
+   `TestCases/airfoil_naca0012_opt` directory for mesh and configuration. The
+   repository includes this setup out of the box—no manual copying required.
 3. **Set up Python**:
    ```bash
    python -m venv .venv

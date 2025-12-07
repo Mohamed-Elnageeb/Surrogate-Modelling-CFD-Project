@@ -170,7 +170,7 @@ def run_su2_case(cfg: Su2RunConfig, param_overrides: dict[str, float | int | str
 
 
 def main() -> None:
-    base_dir = Path(__file__).resolve().parent / "base_case"
+    base_dir = _default_case_dir()
     cfg = Su2RunConfig(workdir=base_dir)
     result = run_su2_case(
         cfg,
@@ -222,49 +222,10 @@ def _latest_output(workdir: Path, stem: str) -> Path | None:
     return max(candidates, key=lambda p: p.stat().st_mtime)
 
 
-def _ensure_base_case_files(case_dir: Path, base_config_name: str) -> list[str]:
-    """Ensure the base-case config and mesh exist, attempting to auto-populate.
+def _default_case_dir() -> Path:
+    """Return the canonical SU2 case directory bundled with the repository."""
 
-    This helper tries to copy assets from ``TestCases/airfoil_naca0012_opt`` and,
-    if necessary, run ``SU2_GEO`` to generate a mesh from ``mesh_config.cfg``.
-    Returns a list of missing-requirement messages (empty if all files exist).
-    """
-
-    missing: list[str] = []
-    base_cfg = case_dir / base_config_name
-    mesh_file = case_dir / "mesh.su2"
-
-    repo_root = Path(__file__).resolve().parents[2]
-    fallback_case = repo_root / "TestCases" / "airfoil_naca0012_opt"
-    fallback_cfg = fallback_case / "config.cfg"
-    fallback_mesh_cfg = fallback_case / "mesh_config.cfg"
-
-    if not base_cfg.exists() and fallback_cfg.exists():
-        base_cfg.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(fallback_cfg, base_cfg)
-
-    if not mesh_file.exists():
-        generated_mesh = fallback_case / "mesh.su2"
-        if generated_mesh.exists():
-            mesh_file.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(generated_mesh, mesh_file)
-        elif fallback_mesh_cfg.exists():
-            try:
-                subprocess.run(["SU2_GEO", str(fallback_mesh_cfg)], cwd=fallback_case, check=True)
-                if generated_mesh.exists():
-                    mesh_file.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy(generated_mesh, mesh_file)
-            except FileNotFoundError:
-                missing.append("SU2_GEO not found. Install SU2 or provide mesh.su2 in base_case.")
-            except subprocess.CalledProcessError as exc:  # pragma: no cover - external tool
-                missing.append(f"SU2_GEO failed with code {exc.returncode} while generating mesh.")
-
-    if not base_cfg.exists():
-        missing.append(f"Missing SU2 base config: {base_cfg}")
-    if not mesh_file.exists():
-        missing.append(f"Missing SU2 mesh file: {mesh_file}")
-
-    return missing
+    return Path(__file__).resolve().parents[2] / "TestCases" / "airfoil_naca0012_opt"
 
 
 def run_cfd(
@@ -277,9 +238,10 @@ def run_cfd(
     Lightweight convenience wrapper for running a single SU2 case.
 
     The helper mirrors the legacy ``run_cfd`` interface that higher-level
-    scripts import. It delegates to :func:`run_su2_case` using the default
-    ``cfdagent/cfd/base_case`` directory (unless ``workdir`` is provided),
-    and returns a dictionary containing lift/drag metrics plus a success flag.
+    scripts import. It delegates to :func:`run_su2_case` using the canonical
+    ``TestCases/airfoil_naca0012_opt`` directory (unless ``workdir`` is
+    provided), and returns a dictionary containing lift/drag metrics plus a
+    success flag.
 
     Args:
         design_id: Identifier for the design being evaluated (used for logging).
@@ -290,15 +252,22 @@ def run_cfd(
         su2_executable: Optional override for the SU2 binary name/path.
     """
 
-    case_dir = workdir or (Path(__file__).resolve().parent / "base_case")
+    case_dir = workdir or _default_case_dir()
     cfg = Su2RunConfig(workdir=case_dir)
     if su2_executable:
         cfg.su2_executable = su2_executable
 
-    volume_stem = _config_value(case_dir / cfg.base_config_name, "VOLUME_FILENAME", "flow_fields")
-    surface_stem = _config_value(case_dir / cfg.base_config_name, "SURFACE_FILENAME", "surface_airfoil")
+    base_cfg = case_dir / cfg.base_config_name
+    volume_stem = _config_value(base_cfg, "VOLUME_FILENAME", "flow_fields")
+    surface_stem = _config_value(base_cfg, "SURFACE_FILENAME", "surface_airfoil")
 
-    missing_reqs = _ensure_base_case_files(case_dir, cfg.base_config_name)
+    missing_reqs = []
+    if not base_cfg.exists():
+        missing_reqs.append(f"Missing SU2 base config: {base_cfg}")
+
+    mesh_file = case_dir / "mesh.su2"
+    if not mesh_file.exists():
+        missing_reqs.append(f"Missing SU2 mesh file: {mesh_file}")
 
     su2_path = shutil.which(cfg.su2_executable)
     if not su2_path:
