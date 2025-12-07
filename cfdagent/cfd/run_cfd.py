@@ -409,8 +409,15 @@ def run_cfd(
         surface_output = _latest_output(case_dir, surface_stem or "surface_airfoil")
 
         missing_metrics = [name for name, value in {"Cl": cl, "Cd": cd}.items() if value is None]
+        invalid_metrics = bool(missing_metrics)
         success = not missing_metrics
-        error_msg = f"Missing {','.join(missing_metrics)} metrics" if missing_metrics else None
+        error_msg = (
+            f"Missing {','.join(missing_metrics)} metrics"
+            if missing_metrics
+            else None
+        )
+        if invalid_metrics:
+            error_msg = error_msg or "Invalid lift/drag metrics (negative or missing)"
 
         return {
             "design_id": design_id,
@@ -419,6 +426,7 @@ def run_cfd(
             "Cd": cd,
             "residual": residual,
             "success": success,
+            "invalid_metrics": invalid_metrics,
             "error": error_msg,
             "history_data": history,
             "stdout": result.get("stdout"),
@@ -439,6 +447,7 @@ def run_cfd(
             "Cd": None,
             "residual": None,
             "success": False,
+            "invalid_metrics": False,
             "error": str(exc),
             "airfoil_plot": airfoil_plot,
             "mesh_plot": mesh_plot,

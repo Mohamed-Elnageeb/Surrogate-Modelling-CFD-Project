@@ -4,6 +4,9 @@ from typing import Iterable
 from pathlib import Path
 from typing import Iterable
 
+from pathlib import Path
+from typing import Iterable
+
 import pandas as pd
 
 from cfdagent.agent.search_agent import AirfoilDesignAgent
@@ -63,6 +66,19 @@ def test_agent_handles_empty_history(tmp_path: Path) -> None:
     assert len(recorded[0]) == 10
     assert set([f"dc{i+1}" for i in range(5)] + [f"dt{i+1}" for i in range(5)]).issubset(df.columns)
     assert {"Cl", "Cd"}.issubset(df.columns)
+
+
+def test_agent_drops_invalid_metrics(tmp_path: Path) -> None:
+    design_log = tmp_path / "designs.csv"
+
+    def run_invalid(design_id: str, vec: Iterable[float], workdir=None, su2_executable=None):
+        return {"Cl": -0.1, "Cd": 0.02, "success": False, "invalid_metrics": True}
+
+    agent = AirfoilDesignAgent(design_log=design_log, run_function=run_invalid, random_state=2)
+    results = agent.run_iteration(num_candidates=1)
+
+    assert results == []
+    assert not design_log.exists()
 
 
 def test_agent_generates_review(tmp_path: Path) -> None:
