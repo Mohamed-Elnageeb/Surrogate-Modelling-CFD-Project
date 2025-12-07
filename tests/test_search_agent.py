@@ -59,3 +59,34 @@ def test_agent_handles_empty_history(tmp_path: Path) -> None:
     assert len(recorded[0]) == 10
     assert set([f"dc{i+1}" for i in range(5)] + [f"dt{i+1}" for i in range(5)]).issubset(df.columns)
     assert {"Cl", "Cd"}.issubset(df.columns)
+
+
+def test_agent_generates_review(tmp_path: Path) -> None:
+    design_log = tmp_path / "designs.csv"
+    history = pd.DataFrame(
+        {
+            "design_id": ["a", "b", "c"],
+            "dc1": [0.0, 0.002, -0.001],
+            "dc2": [0.0, 0.001, -0.001],
+            "dc3": [0.0, 0.0015, -0.0005],
+            "dc4": [0.0, 0.0005, -0.001],
+            "dc5": [0.0, 0.0003, -0.0008],
+            "dt1": [0.0, 0.001, -0.001],
+            "dt2": [0.0, 0.001, -0.001],
+            "dt3": [0.0, 0.001, -0.001],
+            "dt4": [0.0, 0.001, -0.001],
+            "dt5": [0.0, 0.001, -0.001],
+            "Cl": [0.9, 1.0, 0.7],
+            "Cd": [0.04, 0.05, 0.06],
+        }
+    )
+    history.to_csv(design_log, index=False)
+
+    agent = AirfoilDesignAgent(design_log=design_log, random_state=0)
+    review = agent.generate_review(n_best=2)
+
+    assert "Agent optimization review" in review["review"]
+    assert Path(review["review_file"]).exists()
+    assert Path(review["plots"]["geometry"]).exists()
+    # Performance plot can be None when metrics are missing; ensure it exists here.
+    assert Path(review["plots"]["performance"]).exists()

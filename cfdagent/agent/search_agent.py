@@ -11,17 +11,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 import re
 import uuid
 
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from sklearn.dummy import DummyRegressor
 from sklearn.ensemble import GradientBoostingRegressor
 
 from ..cfd.run_cfd import run_cfd
-from ..geometry.airfoil_param import sample_random_design
+from ..geometry.airfoil_param import design_to_airfoil_coords, sample_random_design
 from ..utils.io_utils import DESIGN_LOG
 
 DesignVector = Sequence[float]
@@ -50,10 +54,41 @@ class AirfoilDesignAgent:
     design_bounds: tuple[float, float] = (-0.05, 0.05)
     random_state: int | None = None
     run_function: RunFunction = run_cfd
+    report_dir: Path | None = None
 
     def __post_init__(self) -> None:
         self.design_log = Path(self.design_log)
         self.rng = np.random.default_rng(self.random_state)
+        self.report_dir = (
+            Path(self.report_dir)
+            if self.report_dir is not None
+            else self.design_log.parent / "reports"
+        )
+
+    @property
+    def _benchmarks(self) -> list[dict]:
+        """Static lift/drag reference points drawn from public NACA studies."""
+
+        return [
+            {
+                "name": "NACA0012_lowAoA",
+                "Cl": 0.32,
+                "Cd": 0.009,
+                "conditions": "M=0.15, Re≈3e6, α≈2° (wind-tunnel data)",
+            },
+            {
+                "name": "NACA0012_cruise",
+                "Cl": 0.52,
+                "Cd": 0.011,
+                "conditions": "M=0.3, Re≈6e6, α≈4° (literature averages)",
+            },
+            {
+                "name": "NACA2412_reference",
+                "Cl": 0.72,
+                "Cd": 0.013,
+                "conditions": "M=0.3, Re≈6e6, α≈4° (cambered baseline)",
+            },
+        ]
 
     def load_history(self) -> pd.DataFrame:
         """Return the historical design log (may be empty)."""
@@ -67,6 +102,7 @@ class AirfoilDesignAgent:
             col
             for col in df.columns
             if col.lower().startswith(("dc", "dt", "design_", "param_"))
+            and col.lower() not in {"design_id"}
         ]
         if candidates:
             return sorted(candidates, key=self._column_sort_key)
@@ -184,12 +220,151 @@ class AirfoilDesignAgent:
             df = pd.DataFrame([row])
         df.to_csv(self.design_log, index=False)
 
+    def _plot_performance(self, df: pd.DataFrame, design_columns: list[str]) -> Path | None:
+        if df.empty or not {"Cl", "Cd"}.issubset(df.columns):
+            return None
+
+        df = df.dropna(subset=["Cl", "Cd"])
+        if df.empty:
+            return None
+
+        self.report_dir.mkdir(parents=True, exist_ok=True)
+        fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+
+        scores = self._score_series(df)
+        df["score"] = scores
+        df = df.sort_values("score", ascending=False)
+
+        axes[0].scatter(df["Cd"], df["Cl"], c=df["score"], cmap="viridis", edgecolor="k")
+        axes[0].set_xlabel("Cd (drag coefficient)")
+        axes[0].set_ylabel("Cl (lift coefficient)")
+        axes[0].set_title("Lift vs Drag")
+
+        axes[1].plot(range(len(df)), df["score"], marker="o")
+        axes[1].set_xlabel("Ranked design index")
+        axes[1].set_ylabel("Score (Cl - 0.1*Cd)")
+        axes[1].set_title("Performance leaderboard")
+        axes[1].grid(True, linestyle="--", linewidth=0.5)
+
+        fig.tight_layout()
+        perf_path = self.report_dir / "performance.png"
+        fig.savefig(perf_path, dpi=200)
+        plt.close(fig)
+        return perf_path
+
+    def _plot_geometry(self, vec: Sequence[float]) -> Path:
+        coords = design_to_airfoil_coords(np.asarray(vec, dtype=float))
+        self.report_dir.mkdir(parents=True, exist_ok=True)
+        fig, ax = plt.subplots(figsize=(6, 3))
+        ax.plot(coords[:, 0], coords[:, 1], label="optimized airfoil")
+        ax.set_aspect("equal", adjustable="box")
+        ax.set_xlabel("x / chord")
+        ax.set_ylabel("y / chord")
+        ax.set_title("Optimized airfoil geometry")
+        ax.grid(True, linestyle="--", linewidth=0.5)
+        ax.legend()
+        fig.tight_layout()
+        geom_path = self.report_dir / "best_geometry.png"
+        fig.savefig(geom_path, dpi=200)
+        plt.close(fig)
+        return geom_path
+
+    def _benchmark_summary(self, best_cl: float, best_cd: float) -> tuple[str, dict | None]:
+        best_score = best_cl - 0.1 * best_cd
+        chosen = self._benchmarks[0]
+        deltas: dict[str, float | str] | None = None
+        if self._benchmarks:
+            chosen = min(
+                self._benchmarks,
+                key=lambda b: abs((b["Cl"] - b["Cd"] * 0.1) - best_score),
+            )
+            bench_score = chosen["Cl"] - 0.1 * chosen["Cd"]
+            deltas = {
+                "score_delta": best_score - bench_score,
+                "Cl_delta": best_cl - chosen["Cl"],
+                "Cd_delta": best_cd - chosen["Cd"],
+            }
+
+        summary = (
+            f"Benchmark: {chosen['name']} ({chosen['conditions']}). "
+            f"Reference Cl={chosen['Cl']:.3f}, Cd={chosen['Cd']:.4f}. "
+            f"Agent best Cl={best_cl:.3f}, Cd={best_cd:.4f}, score={best_score:.3f}."
+        )
+        return summary, deltas
+
+    def generate_review(self, n_best: int = 3) -> dict:
+        """Build a post-optimization review with plots and benchmark comparison."""
+
+        df = self.load_history()
+        design_columns = self._design_columns(df)
+        scores = self._score_series(df)
+        for col in design_columns:
+            if col not in df.columns:
+                df[col] = np.nan
+        df["score"] = scores
+        df = df.dropna(subset=design_columns + ["Cl", "Cd", "score"], how="any")
+        if df.empty:
+            return {
+                "review": "No completed CFD runs found. Run the agent to generate data first.",
+                "plots": {},
+            }
+
+        df = df.sort_values("score", ascending=False)
+        leaderboard = df.head(n_best)
+
+        perf_plot = self._plot_performance(df, design_columns)
+        geom_plot = self._plot_geometry(leaderboard.iloc[0][design_columns].to_numpy(dtype=float))
+
+        best_row = leaderboard.iloc[0]
+        bench_text, deltas = self._benchmark_summary(float(best_row["Cl"]), float(best_row["Cd"]))
+
+        bullet_lines = [
+            f"Top {n_best} designs by score (Cl - 0.1*Cd):",
+        ]
+        for idx, row in leaderboard.iterrows():
+            bullet_lines.append(
+                f"  • Design {row.get('design_id', idx)}: Cl={row['Cl']:.3f}, Cd={row['Cd']:.4f}, score={row['score']:.3f}"
+            )
+
+        review_lines = [
+            "Agent optimization review:",
+            *bullet_lines,
+            bench_text,
+        ]
+
+        if deltas:
+            review_lines.append(
+                (
+                    "Delta vs. benchmark: "
+                    f"Δscore={deltas['score_delta']:+.3f}, "
+                    f"ΔCl={deltas['Cl_delta']:+.3f}, "
+                    f"ΔCd={deltas['Cd_delta']:+.4f}"
+                )
+            )
+
+        review_text = "\n".join(review_lines)
+
+        self.report_dir.mkdir(parents=True, exist_ok=True)
+        review_file = self.report_dir / "review.txt"
+        review_file.write_text(review_text)
+
+        return {
+            "review": review_text,
+            "plots": {
+                "performance": str(perf_plot) if perf_plot else None,
+                "geometry": str(geom_plot),
+            },
+            "leaderboard": leaderboard,
+            "review_file": str(review_file),
+        }
+
     def run_iteration(
         self,
         num_candidates: int = 3,
         workdir: Path | None = None,
         su2_executable: str | None = None,
-    ) -> list[dict]:
+        summarize: bool = False,
+    ) -> list[dict] | dict[str, Any]:
         """Run an agent iteration: propose candidates, evaluate them, log results."""
 
         history = self.load_history()
@@ -205,5 +380,11 @@ class AirfoilDesignAgent:
             row = self._build_row(design_id, np.asarray(vec), design_columns, sim_result)
             self._append_row(row)
             results.append(row)
+
+        if summarize:
+            return {
+                "results": results,
+                "review": self.generate_review(),
+            }
 
         return results

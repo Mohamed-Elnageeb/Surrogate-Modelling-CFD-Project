@@ -44,6 +44,39 @@ solver while a physics-aware U‑Net accelerates design exploration.
        --snapshot-cl-column CL --snapshot-cd-column CD
    ```
 
+## Running the full agentic pipeline
+
+1. **Run a CFD evaluation** using the canonical case (optional smoke test):
+   ```python
+   from cfdagent.cfd.run_cfd import run_cfd
+   result = run_cfd("demo", [0.0]*10)  # returns Cl, Cd, residual, and file paths
+   print(result["Cl"], result["Cd"], result["history_path"])
+   ```
+
+2. **Launch the agentic loop** to explore the design space. Each iteration fits
+   a regressor on `data/designs.csv`, perturbs the top designs, runs SU2, and
+   appends the outcomes:
+   ```python
+   from cfdagent.agent.search_agent import AirfoilDesignAgent
+
+   agent = AirfoilDesignAgent()
+   output = agent.run_iteration(num_candidates=3, su2_executable="SU2_CFD", summarize=True)
+   print(output["review"]["review"])  # full textual review including benchmarks
+   print(output["review"]["plots"])   # performance + geometry images under data/reports
+   ```
+
+3. **Generate visuals and benchmarking review** at any time with:
+   ```python
+   review = agent.generate_review(n_best=5)
+   print(review["review"])              # text summary comparing to published NACA data
+   print(review["plots"]["performance"]) # PNG showing lift/drag scatter and leaderboard
+   print(review["plots"]["geometry"])    # PNG of the top airfoil shape
+   ```
+
+4. **(Optional) Retrain the UNet surrogate** on new snapshots and plug it into
+   `AirfoilDesignAgent.run_function` to screen candidates without running SU2,
+   then re-evaluate the most promising designs with `run_cfd`.
+
 ## Training the UNet surrogate
 
 1. **Convert SU2 outputs into snapshots.** The UNet expects `.npz` files with
