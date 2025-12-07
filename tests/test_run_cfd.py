@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import importlib
@@ -181,7 +182,7 @@ def test_latest_output_prefers_text_formats(tmp_path: Path) -> None:
     vtu_file.write_text("<VTKFile></VTKFile>")
 
     csv_mtime = csv_file.stat().st_mtime
-    vtu_file.utime((csv_mtime + 10, csv_mtime + 10))
+    os.utime(vtu_file, (csv_mtime + 10, csv_mtime + 10))
 
     latest = run_cfd_module._latest_output(tmp_path, "flow_fields")
     assert latest == csv_file
