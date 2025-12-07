@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import importlib
@@ -144,11 +145,105 @@ def test_run_cfd_flags_missing_metrics(monkeypatch: pytest.MonkeyPatch, tmp_path
     monkeypatch.setattr(run_cfd_module, "run_su2_case", fake_run)
     monkeypatch.setattr(run_cfd_module, "extract_metrics", lambda _: {})
 
-    result = run_cfd(design_id="abc", design_vec=[0.0] * 10, workdir=tmp_path, su2_executable="SU2_CFD")
+    result = run_cfd(
+        design_id="abc",
+        design_vec=[0.0] * 10,
+        workdir=tmp_path,
+        su2_executable="SU2_CFD",
+        regenerate_mesh=False,
+    )
 
     assert result["Cl"] is None and result["Cd"] is None
     assert result["error"]
     assert result["success"] is False
+
+
+def test_run_cfd_forwards_param_overrides(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    base_cfg = tmp_path / "config.cfg"
+    base_cfg.write_text("MACH_NUMBER= 0.1\nAOA= 2.0\n")
+    (tmp_path / "mesh.su2").write_text("")
+
+    monkeypatch.setattr(run_cfd_module.shutil, "which", lambda name: "/usr/bin/SU2_CFD")
+
+    received_overrides: list[dict[str, float | int | str] | None] = []
+
+    def fake_run(cfg, param_overrides=None):  # pragma: no cover - simple stub
+        received_overrides.append(param_overrides)
+        return {"history_data": {}, "history_path": None, "stdout": "", "stderr": "", "config_path": base_cfg}
+
+    monkeypatch.setattr(run_cfd_module, "run_su2_case", fake_run)
+    monkeypatch.setattr(run_cfd_module, "extract_metrics", lambda _: {})
+
+    overrides = {"MACH_NUMBER": 0.15, "AOA": 5.0}
+    _ = run_cfd(
+        design_id="abc",
+        design_vec=[0.0] * 10,
+        workdir=tmp_path,
+        su2_executable="SU2_CFD",
+        param_overrides=overrides,
+        regenerate_mesh=False,
+    )
+
+    assert received_overrides == [overrides]
+
+
+def test_run_cfd_returns_error_when_mesh_regen_fails(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def fake_regen(design_id: str, design_vec, case_dir: Path, mesh_basename: str = "mesh.su2"):
+        return {
+            "success": False,
+            "error": "gmsh missing",
+            "airfoil_plot": case_dir / "airfoil.png",
+            "mesh_plot": None,
+            "mesh_path": case_dir / mesh_basename,
+        }
+
+    monkeypatch.setattr(run_cfd_module, "_regenerate_mesh_for_design", fake_regen)
+
+    result = run_cfd(design_id="abc", design_vec=[0.0] * 10, workdir=tmp_path, su2_executable="SU2_CFD")
+
+    assert result["success"] is False
+    assert "gmsh missing" in result["error"]
+    assert result["airfoil_plot"].name == "airfoil.png"
+
+
+def test_run_cfd_includes_mesh_artifacts_on_success(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    base_cfg = tmp_path / "config.cfg"
+    base_cfg.write_text("VOLUME_FILENAME=flow\nSURFACE_FILENAME=surface\n")
+
+    def fake_regen(design_id: str, design_vec, case_dir: Path, mesh_basename: str = "mesh.su2"):
+        mesh_path = case_dir / mesh_basename
+        mesh_path.write_text("mesh")
+        airfoil_plot = case_dir / "airfoil.png"
+        mesh_plot = case_dir / "mesh.png"
+        for path in (airfoil_plot, mesh_plot):
+            path.write_text("img")
+        return {
+            "success": True,
+            "mesh_path": mesh_path,
+            "airfoil_plot": airfoil_plot,
+            "mesh_plot": mesh_plot,
+        }
+
+    monkeypatch.setattr(run_cfd_module, "_regenerate_mesh_for_design", fake_regen)
+    monkeypatch.setattr(run_cfd_module.shutil, "which", lambda name: "/usr/bin/SU2_CFD")
+
+    def fake_run(cfg, param_overrides=None):  # pragma: no cover - simple stub
+        return {
+            "history_data": {"CL": 0.2, "CD": 0.03, "RMS_RES": 1e-3},
+            "history_path": None,
+            "stdout": "",
+            "stderr": "",
+            "config_path": base_cfg,
+        }
+
+    monkeypatch.setattr(run_cfd_module, "run_su2_case", fake_run)
+
+    result = run_cfd(design_id="abc", design_vec=[0.0] * 10, workdir=tmp_path, su2_executable="SU2_CFD")
+
+    assert result["success"] is True
+    assert result["mesh_path"].exists()
+    assert result["airfoil_plot"].exists()
+    assert result["mesh_plot"].exists()
 
 
 def test_latest_output_prefers_text_formats(tmp_path: Path) -> None:
@@ -159,7 +254,7 @@ def test_latest_output_prefers_text_formats(tmp_path: Path) -> None:
     vtu_file.write_text("<VTKFile></VTKFile>")
 
     csv_mtime = csv_file.stat().st_mtime
-    vtu_file.utime((csv_mtime + 10, csv_mtime + 10))
+    os.utime(vtu_file, (csv_mtime + 10, csv_mtime + 10))
 
     latest = run_cfd_module._latest_output(tmp_path, "flow_fields")
     assert latest == csv_file

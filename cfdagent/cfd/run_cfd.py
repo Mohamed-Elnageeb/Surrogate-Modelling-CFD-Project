@@ -7,8 +7,11 @@ from typing import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
+
 
 from .postprocess import extract_metrics
+from ..geometry.airfoil_param import design_to_airfoil_coords
 
 
 @dataclass
@@ -281,6 +284,8 @@ def run_cfd(
     design_vec: Iterable[float],
     workdir: Path | None = None,
     su2_executable: str | None = None,
+    param_overrides: dict[str, float | int | str] | None = None,
+    regenerate_mesh: bool = True,
 ) -> dict:
     """
     Lightweight convenience wrapper for running a single SU2 case.
@@ -291,6 +296,11 @@ def run_cfd(
     provided), and returns a dictionary containing lift/drag metrics plus a
     success flag.
 
+    To support varying flow conditions across runs (e.g. Mach/AoA sweeps),
+    callers can provide ``param_overrides`` which are forwarded directly to
+    :func:`create_modified_config`. This ensures each run actually reflects the
+    requested setup instead of silently reusing the baseline configuration.
+
     Args:
         design_id: Identifier for the design being evaluated (used for logging).
         design_vec: Ten-parameter design vector. It is accepted for API
@@ -298,10 +308,39 @@ def run_cfd(
             persist it alongside the returned metrics if needed.
         workdir: Optional path to a prepared SU2 case directory.
         su2_executable: Optional override for the SU2 binary name/path.
+        param_overrides: Optional mapping of SU2 config keys to override for
+            this run (e.g., {"MACH_NUMBER": 0.2, "AOA": 5}).
+        regenerate_mesh: When True (default), rebuild the SU2 mesh from the
+            supplied design vector so each run uses its own geometry instead of
+            sharing the baseline case mesh. Mesh and geometry preview PNGs are
+            stored alongside the run directory.
     """
 
     base_case_dir = workdir or _default_case_dir()
     case_dir = _prepare_isolated_case(base_case_dir, design_id) if workdir is None else base_case_dir
+
+    airfoil_plot: Path | None = None
+    mesh_plot: Path | None = None
+    mesh_path: Path | None = case_dir / "mesh.su2"
+
+    if regenerate_mesh:
+        regen = _regenerate_mesh_for_design(design_id, design_vec, case_dir, mesh_basename="mesh.su2")
+        airfoil_plot = regen.get("airfoil_plot")
+        mesh_plot = regen.get("mesh_plot")
+        mesh_path = regen.get("mesh_path", mesh_path)
+        if not regen.get("success", False):
+            return {
+                "design_id": design_id,
+                "design_vec": list(design_vec),
+                "Cl": None,
+                "Cd": None,
+                "residual": None,
+                "success": False,
+                "error": regen.get("error", "Failed to regenerate mesh"),
+                "airfoil_plot": airfoil_plot,
+                "mesh_plot": mesh_plot,
+                "mesh_path": mesh_path,
+            }
     cfg = Su2RunConfig(workdir=case_dir)
     if su2_executable:
         cfg.su2_executable = su2_executable
@@ -314,7 +353,7 @@ def run_cfd(
     if not base_cfg.exists():
         missing_reqs.append(f"Missing SU2 base config: {base_cfg}")
 
-    mesh_file = case_dir / "mesh.su2"
+    mesh_file = mesh_path or (case_dir / "mesh.su2")
     if not mesh_file.exists():
         missing_reqs.append(f"Missing SU2 mesh file: {mesh_file}")
 
@@ -336,7 +375,7 @@ def run_cfd(
         }
 
     try:
-        result = run_su2_case(cfg)
+        result = run_su2_case(cfg, param_overrides=param_overrides)
         history = result.get("history_data") or {}
         metrics = extract_metrics(result.get("history_path")) if result.get("history_path") else {}
 
@@ -373,6 +412,9 @@ def run_cfd(
             "history_path": result.get("history_path"),
             "volume_output": volume_output,
             "surface_output": surface_output,
+            "airfoil_plot": airfoil_plot,
+            "mesh_plot": mesh_plot,
+            "mesh_path": mesh_file,
         }
     except Exception as exc:  # pylint: disable=broad-except
         return {
@@ -383,7 +425,189 @@ def run_cfd(
             "residual": None,
             "success": False,
             "error": str(exc),
+            "airfoil_plot": airfoil_plot,
+            "mesh_plot": mesh_plot,
+            "mesh_path": mesh_file,
         }
+
+
+def _plot_airfoil_geometry(coords: np.ndarray, outfile: Path) -> Path:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(6, 3))
+    ax.plot(coords[:, 0], coords[:, 1], color="navy", linewidth=1.2, label="airfoil")
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xlabel("x / chord")
+    ax.set_ylabel("y / chord")
+    ax.grid(True, linestyle="--", linewidth=0.5)
+    ax.legend()
+    fig.tight_layout()
+    outfile.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(outfile, dpi=200)
+    plt.close(fig)
+    return outfile
+
+
+def _plot_mesh_outline(gmsh_module, outfile: Path, airfoil_coords: np.ndarray | None = None) -> Path:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    node_tags, node_coords, _ = gmsh_module.model.mesh.getNodes()
+    if len(node_tags) == 0:
+        raise RuntimeError("No mesh nodes generated; cannot plot mesh")
+
+    xy = np.asarray(node_coords, dtype=float).reshape(-1, 3)[:, :2]
+    tag_to_idx = {int(tag): idx for idx, tag in enumerate(node_tags)}
+
+    elem_types, _, elem_nodes = gmsh_module.model.mesh.getElements(dim=2)
+    triangles: list[np.ndarray] = []
+    for etype, nodes in zip(elem_types, elem_nodes):
+        if not nodes:
+            continue
+        _name, dim, _, num_nodes, _ = gmsh_module.model.mesh.getElementProperties(etype)
+        if dim != 2 or num_nodes < 3:
+            continue
+        conn = np.asarray(nodes, dtype=int).reshape(-1, num_nodes)
+        tri_conn = conn[:, :3]
+        tri_indices = np.vectorize(tag_to_idx.get)(tri_conn)
+        triangles.append(tri_indices)
+
+    outfile.parent.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(6, 6))
+    if triangles:
+        tri = np.vstack(triangles)
+        ax.triplot(xy[:, 0], xy[:, 1], tri, linewidth=0.3, color="0.25")
+    ax.scatter(xy[:, 0], xy[:, 1], s=1, color="0.55", alpha=0.6)
+    if airfoil_coords is not None:
+        ax.plot(airfoil_coords[:, 0], airfoil_coords[:, 1], color="crimson", linewidth=1.0, label="Airfoil")
+        ax.legend()
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_title("Generated mesh (triangulation)")
+    ax.grid(True, linestyle="--", linewidth=0.5)
+    fig.tight_layout()
+    fig.savefig(outfile, dpi=200)
+    plt.close(fig)
+    return outfile
+
+
+def _regenerate_mesh_for_design(
+    design_id: str, design_vec: Iterable[float], case_dir: Path, mesh_basename: str = "mesh.su2"
+) -> dict:
+    """
+    Build a fresh mesh and quick-look plots for a given design vector.
+
+    The helper uses the parametric airfoil description to rebuild the mesh in
+    the isolated SU2 working directory so that each design evaluation is tied
+    to its own geometry rather than a shared baseline mesh. A pair of PNG
+    previews are emitted alongside the mesh for easy inspection.
+    """
+
+    coords = design_to_airfoil_coords(np.asarray(list(design_vec), dtype=float))
+    airfoil_plot = _plot_airfoil_geometry(coords, case_dir / f"{design_id}_airfoil.png")
+
+    try:
+        import gmsh  # type: ignore
+    except Exception as exc:  # pragma: no cover - optional dependency
+        return {
+            "success": False,
+            "error": "The Gmsh Python API is required to regenerate meshes. Install gmsh to continue.",
+            "airfoil_plot": airfoil_plot,
+        }
+
+    chord = max(float(coords[:, 0].max() - coords[:, 0].min()), 1e-3)
+    farfield_radius = max(20.0 * chord, 5.0)
+    mesh_size_airfoil = max(chord * 0.01, 1e-4)
+    mesh_size_farfield = max(farfield_radius * 0.05, mesh_size_airfoil * 5)
+    mesh_path = case_dir / mesh_basename
+
+    gmsh.initialize()
+    gmsh.model.add(f"airfoil_{design_id}")
+
+    try:
+        point_map: dict[tuple[float, float], int] = {}
+
+        def add_point(pt: tuple[float, float], size: float) -> int:
+            key = (round(pt[0], 8), round(pt[1], 8))
+            if key in point_map:
+                return point_map[key]
+            tag = gmsh.model.occ.addPoint(pt[0], pt[1], 0.0, size)
+            point_map[key] = tag
+            return tag
+
+        num_surface_points = (len(coords) + 1) // 2
+        upper_points = [tuple(pt) for pt in coords[:num_surface_points]]
+        lower_points = [tuple(pt) for pt in coords[num_surface_points:]]
+
+        leading_tag = add_point(upper_points[0], mesh_size_airfoil)
+        trailing_tag = add_point(upper_points[-1], mesh_size_airfoil)
+
+        upper_tags = (
+            [leading_tag]
+            + [add_point(pt, mesh_size_airfoil) for pt in upper_points[1:-1]]
+            + [trailing_tag]
+        )
+        lower_tags = (
+            [trailing_tag]
+            + [add_point(pt, mesh_size_airfoil) for pt in lower_points[1:-1]]
+            + [leading_tag]
+        )
+
+        spline_upper = gmsh.model.occ.addSpline(upper_tags)
+        spline_lower = gmsh.model.occ.addSpline(lower_tags)
+
+        center = gmsh.model.occ.addPoint(0.0, 0.0, 0.0)
+        p0 = gmsh.model.occ.addPoint(farfield_radius, 0.0, 0.0, mesh_size_farfield)
+        p1 = gmsh.model.occ.addPoint(0.0, farfield_radius, 0.0, mesh_size_farfield)
+        p2 = gmsh.model.occ.addPoint(-farfield_radius, 0.0, 0.0, mesh_size_farfield)
+        p3 = gmsh.model.occ.addPoint(0.0, -farfield_radius, 0.0, mesh_size_farfield)
+
+        arc1 = gmsh.model.occ.addCircleArc(p0, center, p1)
+        arc2 = gmsh.model.occ.addCircleArc(p1, center, p2)
+        arc3 = gmsh.model.occ.addCircleArc(p2, center, p3)
+        arc4 = gmsh.model.occ.addCircleArc(p3, center, p0)
+        outer_loop = gmsh.model.occ.addCurveLoop([arc1, arc2, arc3, arc4])
+        inner_loop = gmsh.model.occ.addCurveLoop([spline_upper, spline_lower])
+        surface = gmsh.model.occ.addPlaneSurface([outer_loop, inner_loop])
+
+        gmsh.model.occ.synchronize()
+
+        field_distance = gmsh.model.mesh.field.add("Distance")
+        gmsh.model.mesh.field.setNumbers(field_distance, "EdgesList", [spline_upper, spline_lower])
+        field_threshold = gmsh.model.mesh.field.add("Threshold")
+        gmsh.model.mesh.field.setNumber(field_threshold, "IField", field_distance)
+        gmsh.model.mesh.field.setNumber(field_threshold, "LcMin", mesh_size_airfoil)
+        gmsh.model.mesh.field.setNumber(field_threshold, "LcMax", mesh_size_farfield)
+        gmsh.model.mesh.field.setNumber(field_threshold, "DistMin", 0.1)
+        gmsh.model.mesh.field.setNumber(field_threshold, "DistMax", farfield_radius)
+        gmsh.model.mesh.field.setAsBackgroundMesh(field_threshold)
+
+        gmsh.model.addPhysicalGroup(2, [surface], name="Fluid")
+        gmsh.model.addPhysicalGroup(1, [spline_upper, spline_lower], name="Airfoil")
+        gmsh.model.addPhysicalGroup(1, [arc1, arc2, arc3, arc4], name="Farfield")
+        gmsh.model.addPhysicalGroup(1, [arc1, arc2, arc3, arc4], name="Symmetry")
+
+        gmsh.model.mesh.generate(2)
+        mesh_path.parent.mkdir(parents=True, exist_ok=True)
+        gmsh.write(str(mesh_path))
+
+        mesh_plot = _plot_mesh_outline(gmsh, case_dir / f"{design_id}_mesh.png", coords)
+
+    finally:
+        gmsh.finalize()
+
+    return {
+        "success": True,
+        "mesh_path": mesh_path,
+        "airfoil_plot": airfoil_plot,
+        "mesh_plot": mesh_plot,
+    }
 
 
 if __name__ == "__main__":
