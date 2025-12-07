@@ -467,7 +467,7 @@ def _plot_mesh_outline(gmsh_module, outfile: Path, airfoil_coords: np.ndarray | 
     elem_types, _, elem_nodes = gmsh_module.model.mesh.getElements(dim=2)
     triangles: list[np.ndarray] = []
     for etype, nodes in zip(elem_types, elem_nodes):
-        if not nodes:
+        if len(nodes) == 0:
             continue
         _name, dim, _, num_nodes, _ = gmsh_module.model.mesh.getElementProperties(etype)
         if dim != 2 or num_nodes < 3:
