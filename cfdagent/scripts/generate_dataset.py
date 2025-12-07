@@ -24,13 +24,23 @@ def _create_snapshot(design_id: str, spec: SnapshotSpec, run_result: dict) -> Pa
     return create_snapshot_from_run(design_id, spec, run_result)
 
 
-def _run_single_simulation(_: int, snapshot_spec: SnapshotSpec | None = None) -> Tuple[dict, float]:
-    """Run one CFD simulation and return its row dict and wall time."""
+def _run_single_simulation(
+    _: int, snapshot_spec: SnapshotSpec | None = None
+) -> Tuple[dict | None, float, str | None]:
+    """Run one CFD simulation and return its row dict and wall time.
+
+    When lift/drag metrics are missing or negative, the run is discarded
+    entirely to keep the dataset free from invalid samples.
+    """
 
     start = time.time()
     design_vec = sample_random_design()
     design_id = str(uuid.uuid4())[:8]
     result = run_cfd(design_id, design_vec)
+
+    if result.get("invalid_metrics"):
+        duration = time.time() - start
+        return None, duration, "invalid_metrics"
 
     row = {"design_id": design_id}
     for idx in range(5):
@@ -41,7 +51,6 @@ def _run_single_simulation(_: int, snapshot_spec: SnapshotSpec | None = None) ->
         {
             "Cl": result.get("Cl"),
             "Cd": result.get("Cd"),
-            "residual": result.get("residual"),
             "success": result.get("success", False),
         }
     )
@@ -55,7 +64,7 @@ def _run_single_simulation(_: int, snapshot_spec: SnapshotSpec | None = None) ->
         row["error"] = result.get("error")
 
     duration = time.time() - start
-    return row, duration
+    return row, duration, None
 
 
 def main():
@@ -139,7 +148,13 @@ def main():
 
     if args.max_workers <= 1:
         for i in range(args.n_samples):
-            row, duration = _run_single_simulation(i, snapshot_spec)
+            row, duration, skip_reason = _run_single_simulation(i, snapshot_spec)
+            if skip_reason:
+                print(
+                    f"[{i+1}/{args.n_samples}] discarded run (reason={skip_reason}) elapsed={time.time() - start_time:.1f}s"
+                )
+                continue
+
             append_design_result(row)
             if row["success"]:
                 successes += 1
@@ -189,33 +204,44 @@ def main():
             while futures:
                 completed_future = next(concurrent.futures.as_completed(futures))
                 futures.remove(completed_future)
-                row, duration = completed_future.result()
+                row, duration, skip_reason = completed_future.result()
 
-                total_completed += 1
-                total_duration += duration
-                append_design_result(row)
-                if row["success"]:
-                    successes += 1
+                if skip_reason:
+                    total_completed += 1
+                    total_duration += duration
+                    elapsed = time.time() - start_time
+                    avg_time = total_duration / total_completed
+                    remaining = max(args.n_samples - total_completed, 0)
+                    eta = remaining * avg_time
+                    print(
+                        f"[{total_completed}/{args.n_samples}] discarded run (reason={skip_reason}) elapsed={elapsed:.1f}s runtime={duration:.1f}s eta={eta:.1f}s workers={args.max_workers}"
+                    )
+                else:
+                    total_completed += 1
+                    total_duration += duration
+                    append_design_result(row)
+                    if row["success"]:
+                        successes += 1
 
-                elapsed = time.time() - start_time
-                avg_time = total_duration / total_completed
-                remaining = max(args.n_samples - total_completed, 0)
-                eta = remaining * avg_time
+                    elapsed = time.time() - start_time
+                    avg_time = total_duration / total_completed
+                    remaining = max(args.n_samples - total_completed, 0)
+                    eta = remaining * avg_time
 
-                status = (
-                    f"[{total_completed}/{args.n_samples}] design_id={row['design_id']} "
-                    f"success={row['success']} elapsed={elapsed:.1f}s runtime={duration:.1f}s"
-                )
-                if row.get("flow_path"):
-                    status += f" snapshot={row['flow_path']}"
-                if row.get("snapshot_error"):
-                    status += f" snapshot_error={row['snapshot_error']}"
-                if not row["success"] and row.get("error"):
-                    status += f" error={row['error']}"
-                if remaining:
-                    status += f" eta={eta:.1f}s"
-                status += f" workers={args.max_workers}"
-                print(status)
+                    status = (
+                        f"[{total_completed}/{args.n_samples}] design_id={row['design_id']} "
+                        f"success={row['success']} elapsed={elapsed:.1f}s runtime={duration:.1f}s"
+                    )
+                    if row.get("flow_path"):
+                        status += f" snapshot={row['flow_path']}"
+                    if row.get("snapshot_error"):
+                        status += f" snapshot_error={row['snapshot_error']}"
+                    if not row["success"] and row.get("error"):
+                        status += f" error={row['error']}"
+                    if remaining:
+                        status += f" eta={eta:.1f}s"
+                    status += f" workers={args.max_workers}"
+                    print(status)
 
                 if args.target_successes is not None and successes >= args.target_successes:
                     print(

@@ -31,9 +31,10 @@ solver while a physics-aware U‑Net accelerates design exploration.
    pip install -e .
    ```
 4. **Generate data** (once SU2 cases are available). The dataset script logs
-   design vectors and metrics to `data/designs.csv`. Add `--snapshot-dir` and
-   related flags to persist per-run UNet snapshots directly from SU2 outputs
-   (requires ASCII volume/surface tables):
+   design vectors and metrics to `data/designs.csv`, discarding any run where
+   lift/drag coefficients come back missing or negative. Add `--snapshot-dir`
+   and related flags to persist per-run UNet snapshots directly from SU2
+   outputs (requires ASCII volume/surface tables):
    ```bash
    python -m cfdagent.scripts.generate_dataset \
        --n_samples 20 \
