@@ -8,13 +8,7 @@ from typing import Tuple
 
 from ..geometry.airfoil_param import sample_random_design
 from ..cfd.run_cfd import run_cfd
-from ..surrogate.snapshot_builder import (
-    SnapshotConfig,
-    build_field_tensor,
-    read_su2_table,
-    save_snapshot_from_arrays,
-    su2_to_unet_snapshot,
-)
+from ..surrogate.snapshot_builder import SnapshotConfig, su2_to_unet_snapshot
 from ..utils.io_utils import DESIGN_LOG, append_design_result
 
 
@@ -47,27 +41,28 @@ def _create_snapshot(design_id: str, spec: SnapshotSpec, run_result: dict) -> Pa
     output_path = spec.output_dir / f"{design_id}.npz"
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if surface_path and Path(surface_path).exists():
-        cfg = SnapshotConfig(
-            input_fields=spec.input_fields,
-            target_fields=spec.target_fields,
-            grid_shape=spec.grid_shape,
-            cl_name=spec.cl_name,
-            cd_name=spec.cd_name,
-        )
-        su2_to_unet_snapshot(volume_path, Path(surface_path), output_path, cfg)
-        return output_path
+    cfg = SnapshotConfig(
+        input_fields=spec.input_fields,
+        target_fields=spec.target_fields,
+        grid_shape=spec.grid_shape,
+        cl_name=spec.cl_name,
+        cd_name=spec.cd_name,
+    )
 
-    table = read_su2_table(volume_path)
-    inputs = build_field_tensor(table, spec.input_fields, spec.grid_shape)
-    targets = build_field_tensor(table, spec.target_fields, spec.grid_shape)
+    # Always delegate snapshot construction to the unified helper so that VTU volume
+    # files and history.csv fallbacks are both supported. When surface forces are
+    # missing, we explicitly pass the discovered history path (if any) so CL/CD can
+    # still be recovered from the run output instead of failing with binary file
+    # errors on VTU data.
+    history_path = run_result.get("history_path")
+    su2_to_unet_snapshot(
+        volume_path,
+        Path(surface_path) if surface_path and Path(surface_path).exists() else None,
+        output_path,
+        cfg,
+        history_path=Path(history_path) if history_path else None,
+    )
 
-    cl = run_result.get("Cl")
-    cd = run_result.get("Cd")
-    if cl is None or cd is None:
-        raise FileNotFoundError("Surface forces missing and Cl/Cd unavailable for snapshot.")
-
-    save_snapshot_from_arrays(output_path, inputs, targets, cl, cd)
     return output_path
 
 
