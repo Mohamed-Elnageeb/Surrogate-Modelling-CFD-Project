@@ -3,6 +3,17 @@ from typing import Any, Dict
 import csv
 import numpy as np
 
+
+def _clean_field_name(name: str) -> str:
+    """Return a normalized SU2 history column name.
+
+    SU2 history exports sometimes include extra whitespace and quotes around
+    column names (e.g., ``"CL"``). Normalizing the keys lets downstream code use
+    consistent lookups regardless of formatting quirks.
+    """
+
+    return name.strip().strip('"')
+
 def extract_metrics(history_file: Path) -> Dict[str, Any]:
     """
     Extract the final Cl, Cd, and residual values from an SU2 history CSV.
@@ -11,23 +22,50 @@ def extract_metrics(history_file: Path) -> Dict[str, Any]:
     if not history_file.exists():
         return {"Cl": None, "Cd": None, "residual": None}
 
-    last_row = None
     with history_file.open("r", newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            if row:
-                last_row = row
+        raw_rows = list(csv.reader(f))
+
+    if not raw_rows:
+        return {"Cl": None, "Cd": None, "residual": None}
+
+    header = [_clean_field_name(h) for h in raw_rows[0] if h is not None]
+    last_row = None
+    for raw_row in raw_rows[1:]:
+        if not any(raw_row):
+            continue
+        cleaned_row = {h: (raw_row[idx] if idx < len(raw_row) else "") for idx, h in enumerate(header)}
+        last_row = cleaned_row
 
     if last_row is None:
         return {"Cl": None, "Cd": None, "residual": None}
 
-    cl = float(last_row.get("CL", last_row.get("CLtot", last_row.get("cl", None))) or 0) if last_row.get("CL") or last_row.get("CLtot") or last_row.get("cl") else None
-    cd = float(last_row.get("CD", last_row.get("CDtot", last_row.get("cd", None))) or 0) if last_row.get("CD") or last_row.get("CDtot") or last_row.get("cd") else None
+    def _as_float(value: str | None) -> float | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            return None
+        try:
+            return float(value)
+        except ValueError:
+            return None
+
+    cl = None
+    for key in ("CL", "CLtot", "cl", "Cl"):
+        cl = _as_float(last_row.get(key))
+        if cl is not None:
+            break
+
+    cd = None
+    for key in ("CD", "CDtot", "cd", "Cd"):
+        cd = _as_float(last_row.get(key))
+        if cd is not None:
+            break
+
     residual = None
     for key in ("RMS_RES", "RMS_DENSITY", "residual"):
-        if key in last_row:
-            residual_value = last_row[key]
-            residual = float(residual_value) if residual_value else None
+        residual = _as_float(last_row.get(key))
+        if residual is not None:
             break
 
     return {"Cl": cl, "Cd": cd, "residual": residual}
