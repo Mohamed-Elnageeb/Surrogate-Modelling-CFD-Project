@@ -11,7 +11,7 @@ from cfdagent.utils.snapshot_pipeline import SnapshotSpec
 
 
 def _fake_run(design_id: str, vec: Iterable[float], workdir=None, su2_executable=None):
-    return {"Cl": 1.0, "Cd": 0.1, "residual": 1e-3, "success": True}
+    return {"Cl": 1.0, "Cd": 0.1, "success": True}
 
 
 def test_agent_trains_and_appends(tmp_path: Path) -> None:
@@ -43,7 +43,7 @@ def test_agent_trains_and_appends(tmp_path: Path) -> None:
     df = pd.read_csv(design_log)
     assert len(results) == 2
     assert len(df) == len(history) + 2
-    assert {"Cl", "Cd", "residual", "success"}.issubset(df.columns)
+    assert {"Cl", "Cd", "success"}.issubset(df.columns)
 
 
 def test_agent_handles_empty_history(tmp_path: Path) -> None:
@@ -52,7 +52,7 @@ def test_agent_handles_empty_history(tmp_path: Path) -> None:
 
     def run_and_record(design_id: str, vec: Iterable[float], workdir=None, su2_executable=None):
         recorded.append(list(vec))
-        return {"Cl": 0.9, "Cd": 0.05, "residual": 5e-4, "success": True}
+        return {"Cl": 0.9, "Cd": 0.05, "success": True}
 
     agent = AirfoilDesignAgent(design_log=design_log, run_function=run_and_record, random_state=0)
     results = agent.run_iteration(num_candidates=1)
@@ -119,7 +119,6 @@ x,y,p,u,v
             "design_vec": list(vec),
             "Cl": 0.6,
             "Cd": 0.02,
-            "residual": 1e-3,
             "success": True,
             "volume_output": volume_path,
             "surface_output": surface_path,

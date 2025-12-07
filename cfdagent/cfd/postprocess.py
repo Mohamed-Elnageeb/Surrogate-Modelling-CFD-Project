@@ -68,7 +68,10 @@ def extract_metrics(history_file: Path) -> Dict[str, Any]:
         if residual is not None:
             break
 
-    return {"Cl": cl, "Cd": cd, "residual": residual}
+    def _sanitize_positive(value: float | None) -> float | None:
+        return value if value is None or value >= 0 else None
+
+    return {"Cl": _sanitize_positive(cl), "Cd": _sanitize_positive(cd), "residual": residual}
 
 
 def save_flowfield(solution_dir: Path, out_path: Path) -> None:

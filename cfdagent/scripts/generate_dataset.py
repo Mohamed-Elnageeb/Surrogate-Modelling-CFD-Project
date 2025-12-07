@@ -41,7 +41,6 @@ def _run_single_simulation(_: int, snapshot_spec: SnapshotSpec | None = None) ->
         {
             "Cl": result.get("Cl"),
             "Cd": result.get("Cd"),
-            "residual": result.get("residual"),
             "success": result.get("success", False),
         }
     )

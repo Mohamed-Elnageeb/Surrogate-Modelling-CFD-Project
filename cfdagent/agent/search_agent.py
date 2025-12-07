@@ -208,7 +208,6 @@ class AirfoilDesignAgent:
             {
                 "Cl": result.get("Cl"),
                 "Cd": result.get("Cd"),
-                "residual": result.get("residual"),
                 "success": result.get("success", False),
             }
         )

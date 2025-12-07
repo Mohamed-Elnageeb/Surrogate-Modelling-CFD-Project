@@ -196,6 +196,18 @@ def _extract_first(history: dict, *keys: str):
     return None
 
 
+def _sanitize_positive(value: float | int | None) -> float | None:
+    """Return ``None`` when a metric is negative to flag it as invalid."""
+
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if numeric >= 0 else None
+
+
 def _config_value(cfg_path: Path, key: str, default: str | None = None) -> str | None:
     """Return the value assigned to ``key`` in a SU2 config, if present."""
 
@@ -389,6 +401,9 @@ def run_cfd(
             cd = _extract_first(history, "CD", "CDtot", "cd", "Cd")
         if residual is None:
             residual = _extract_first(history, "RMS_RES", "RMS_DENSITY", "residual")
+
+        cl = _sanitize_positive(cl)
+        cd = _sanitize_positive(cd)
 
         volume_output = _latest_output(case_dir, volume_stem or "flow_fields")
         surface_output = _latest_output(case_dir, surface_stem or "surface_airfoil")
