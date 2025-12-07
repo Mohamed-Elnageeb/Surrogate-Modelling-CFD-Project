@@ -210,16 +210,30 @@ def _config_value(cfg_path: Path, key: str, default: str | None = None) -> str |
     return default
 
 
-def _latest_output(workdir: Path, stem: str) -> Path | None:
-    """Find the newest output file matching a given stem in ``workdir``."""
+def _latest_output(
+    workdir: Path, stem: str, preferred_exts: tuple[str, ...] | None = None
+) -> Path | None:
+    """Find the newest output file matching a given stem in ``workdir``.
 
-    extensions = (".csv", ".dat", ".vtu", ".vtk", ".su2", ".txt")
+    When multiple file formats are present (e.g., CSV and VTU exports), the search
+    prefers text-friendly formats first so that downstream readers avoid brittle
+    binary parsers.
+    """
+
+    preferred_exts = preferred_exts or (".csv", ".dat", ".su2", ".txt", ".vtu", ".vtk")
     candidates = list(workdir.glob(f"{stem}*"))
-    candidates = [c for c in candidates if c.suffix in extensions]
+    candidates = [c for c in candidates if c.suffix in preferred_exts]
     if not candidates:
         return None
 
-    return max(candidates, key=lambda p: p.stat().st_mtime)
+    def _priority(path: Path) -> tuple[int, float]:
+        try:
+            rank = preferred_exts.index(path.suffix)
+        except ValueError:
+            rank = len(preferred_exts)
+        return (rank, -path.stat().st_mtime)
+
+    return sorted(candidates, key=_priority)[0]
 
 
 def _default_case_dir() -> Path:

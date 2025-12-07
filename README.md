@@ -55,12 +55,30 @@ solver while a physics-aware U‑Net accelerates design exploration.
 
 2. **Launch the agentic loop** to explore the design space. Each iteration fits
    a regressor on `data/designs.csv`, perturbs the top designs, runs SU2, and
-   appends the outcomes:
+   appends the outcomes. Optionally pass a `SnapshotSpec` to persist UNet-ready
+   snapshots alongside the tabular log, keeping the pipeline self contained:
    ```python
+   from pathlib import Path
+
    from cfdagent.agent.search_agent import AirfoilDesignAgent
+   from cfdagent.utils.snapshot_pipeline import SnapshotSpec
+
+   snapshot_spec = SnapshotSpec(
+       output_dir=Path("data/snapshots"),
+       grid_shape=(128, 256),
+       input_fields=["MACH", "PRESSURE", "TEMPERATURE"],
+       target_fields=["MACH", "PRESSURE", "TEMPERATURE"],
+       cl_name="CL",
+       cd_name="CD",
+   )
 
    agent = AirfoilDesignAgent()
-   output = agent.run_iteration(num_candidates=3, su2_executable="SU2_CFD", summarize=True)
+   output = agent.run_iteration(
+       num_candidates=3,
+       su2_executable="SU2_CFD",
+       summarize=True,
+       snapshot_spec=snapshot_spec,
+   )
    print(output["review"]["review"])  # full textual review including benchmarks
    print(output["review"]["plots"])   # performance + geometry images under data/reports
    ```

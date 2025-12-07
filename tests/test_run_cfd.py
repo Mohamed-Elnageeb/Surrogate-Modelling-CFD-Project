@@ -149,3 +149,20 @@ def test_run_cfd_flags_missing_metrics(monkeypatch: pytest.MonkeyPatch, tmp_path
     assert result["Cl"] is None and result["Cd"] is None
     assert result["error"]
     assert result["success"] is False
+
+
+def test_latest_output_prefers_text_formats(tmp_path: Path) -> None:
+    csv_file = tmp_path / "flow_fields.csv"
+    vtu_file = tmp_path / "flow_fields.vtu"
+
+    csv_file.write_text("x,y,p\n0,0,1\n")
+    vtu_file.write_text("<VTKFile></VTKFile>")
+
+    csv_mtime = csv_file.stat().st_mtime
+    vtu_file.utime((csv_mtime + 10, csv_mtime + 10))
+
+    latest = run_cfd_module._latest_output(tmp_path, "flow_fields")
+    assert latest == csv_file
+
+    newest_only = run_cfd_module._latest_output(tmp_path, "flow_fields", preferred_exts=(".vtu",))
+    assert newest_only == vtu_file
