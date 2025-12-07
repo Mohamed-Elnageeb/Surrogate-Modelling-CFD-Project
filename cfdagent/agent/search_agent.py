@@ -26,6 +26,11 @@ from sklearn.ensemble import GradientBoostingRegressor
 
 from ..cfd.run_cfd import run_cfd
 from ..geometry.airfoil_param import design_to_airfoil_coords, sample_random_design
+from ..utils.snapshot_pipeline import (
+    SnapshotSpec,
+    create_snapshot_from_run,
+    relative_snapshot_path,
+)
 from ..utils.io_utils import DESIGN_LOG
 
 DesignVector = Sequence[float]
@@ -364,8 +369,14 @@ class AirfoilDesignAgent:
         workdir: Path | None = None,
         su2_executable: str | None = None,
         summarize: bool = False,
+        snapshot_spec: SnapshotSpec | None = None,
     ) -> list[dict] | dict[str, Any]:
-        """Run an agent iteration: propose candidates, evaluate them, log results."""
+        """Run an agent iteration: propose candidates, evaluate them, log results.
+
+        When ``snapshot_spec`` is provided, each successful run also emits a
+        snapshot archive alongside the logged metrics, enabling a full
+        dataset→training pipeline without switching tools.
+        """
 
         history = self.load_history()
         design_columns = self._design_columns(history)
@@ -378,6 +389,12 @@ class AirfoilDesignAgent:
             design_id = str(uuid.uuid4())[:8]
             sim_result = self.run_function(design_id, vec, workdir=workdir, su2_executable=su2_executable)
             row = self._build_row(design_id, np.asarray(vec), design_columns, sim_result)
+            if snapshot_spec and row.get("success"):
+                try:
+                    snapshot_path = create_snapshot_from_run(design_id, snapshot_spec, sim_result)
+                    row["flow_path"] = relative_snapshot_path(snapshot_path)
+                except Exception as exc:  # pylint: disable=broad-except
+                    row["snapshot_error"] = str(exc)
             self._append_row(row)
             results.append(row)
 
