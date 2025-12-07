@@ -469,7 +469,9 @@ def _plot_mesh_outline(gmsh_module, outfile: Path, airfoil_coords: np.ndarray | 
     for etype, nodes in zip(elem_types, elem_nodes):
         if len(nodes) == 0:
             continue
-        _name, dim, _, num_nodes, _ = gmsh_module.model.mesh.getElementProperties(etype)
+        properties = gmsh_module.model.mesh.getElementProperties(etype)
+        dim = properties[1]
+        num_nodes = properties[3]
         if dim != 2 or num_nodes < 3:
             continue
         conn = np.asarray(nodes, dtype=int).reshape(-1, num_nodes)
