@@ -114,7 +114,7 @@ def run_param_sweep(
 
 
 def main() -> None:
-    base_dir = Path(__file__).resolve().parent / "base_case"
+    base_dir = Path(__file__).resolve().parents[2] / "TestCases" / "airfoil_naca0012_opt"
     cfg = Su2RunConfig(workdir=base_dir)
 
     machs = [0.1, 0.15]

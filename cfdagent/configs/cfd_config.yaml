@@ -16,6 +16,6 @@ numerics:
   convergence_tolerance: 1.0e-6
 
 mesh:
-  base_case_dir: cfdagent/cfd/base_case
+  base_case_dir: TestCases/airfoil_naca0012_opt
   config_filename: config.cfg
   mesh_filename: mesh.su2
