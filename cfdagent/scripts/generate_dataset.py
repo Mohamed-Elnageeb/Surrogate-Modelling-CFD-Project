@@ -61,7 +61,7 @@ def _run_single_simulation(_: int, snapshot_spec: SnapshotSpec | None = None) ->
 def main():
     parser = argparse.ArgumentParser(description="Generate CFD dataset samples")
     parser.add_argument(
-        "--n_samples", type=int, default=20, help="Number of random designs to simulate"
+        "--n_samples", type=int, default=5, help="Number of random designs to simulate"
     )
     parser.add_argument(
         "--max_workers",

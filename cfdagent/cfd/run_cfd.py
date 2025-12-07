@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import subprocess
-import csv
 import shutil
 import re
 from typing import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+
 
 from .postprocess import extract_metrics
 
@@ -242,6 +242,40 @@ def _default_case_dir() -> Path:
     return Path(__file__).resolve().parents[2] / "TestCases" / "airfoil_naca0012_opt"
 
 
+def _prepare_isolated_case(base_case_dir: Path, design_id: str) -> Path:
+    """Return a fresh, design-specific working directory for a CFD run.
+
+    SU2 writes outputs such as ``history.csv`` directly inside the working
+    directory. When multiple designs reuse the same directory (especially in
+    parallel), the history file accumulates rows from all runs and downstream
+    readers end up extracting identical metrics regardless of the sampled
+    design. To avoid the cross-run contamination, we copy the canonical case
+    into a dedicated subdirectory and clear any pre-existing history files
+    before launching SU2.
+    """
+
+    runs_root = Path(__file__).resolve().parents[1] / "data" / "runs"
+    runs_root.mkdir(parents=True, exist_ok=True)
+
+    # Place the copied case in a predictable location so callers can inspect
+    # the raw SU2 outputs if needed. Recreate the folder if it already exists
+    # to guarantee a clean slate for every design.
+    isolated_dir = runs_root / design_id
+    if isolated_dir.exists():
+        shutil.rmtree(isolated_dir)
+
+    shutil.copytree(base_case_dir, isolated_dir)
+
+    # Ensure no stale history files leak into the next run's metrics.
+    for history_file in isolated_dir.glob("history*"):
+        try:
+            history_file.unlink()
+        except OSError:
+            pass
+
+    return isolated_dir
+
+
 def run_cfd(
     design_id: str,
     design_vec: Iterable[float],
@@ -266,7 +300,8 @@ def run_cfd(
         su2_executable: Optional override for the SU2 binary name/path.
     """
 
-    case_dir = workdir or _default_case_dir()
+    base_case_dir = workdir or _default_case_dir()
+    case_dir = _prepare_isolated_case(base_case_dir, design_id) if workdir is None else base_case_dir
     cfg = Su2RunConfig(workdir=case_dir)
     if su2_executable:
         cfg.su2_executable = su2_executable
