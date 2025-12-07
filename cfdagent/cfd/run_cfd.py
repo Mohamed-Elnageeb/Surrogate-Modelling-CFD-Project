@@ -281,6 +281,7 @@ def run_cfd(
     design_vec: Iterable[float],
     workdir: Path | None = None,
     su2_executable: str | None = None,
+    param_overrides: dict[str, float | int | str] | None = None,
 ) -> dict:
     """
     Lightweight convenience wrapper for running a single SU2 case.
@@ -291,6 +292,11 @@ def run_cfd(
     provided), and returns a dictionary containing lift/drag metrics plus a
     success flag.
 
+    To support varying flow conditions across runs (e.g. Mach/AoA sweeps),
+    callers can provide ``param_overrides`` which are forwarded directly to
+    :func:`create_modified_config`. This ensures each run actually reflects the
+    requested setup instead of silently reusing the baseline configuration.
+
     Args:
         design_id: Identifier for the design being evaluated (used for logging).
         design_vec: Ten-parameter design vector. It is accepted for API
@@ -298,6 +304,8 @@ def run_cfd(
             persist it alongside the returned metrics if needed.
         workdir: Optional path to a prepared SU2 case directory.
         su2_executable: Optional override for the SU2 binary name/path.
+        param_overrides: Optional mapping of SU2 config keys to override for
+            this run (e.g., {"MACH_NUMBER": 0.2, "AOA": 5}).
     """
 
     base_case_dir = workdir or _default_case_dir()
@@ -336,7 +344,7 @@ def run_cfd(
         }
 
     try:
-        result = run_su2_case(cfg)
+        result = run_su2_case(cfg, param_overrides=param_overrides)
         history = result.get("history_data") or {}
         metrics = extract_metrics(result.get("history_path")) if result.get("history_path") else {}
 
