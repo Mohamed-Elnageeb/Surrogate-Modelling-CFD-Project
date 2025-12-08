@@ -267,7 +267,10 @@ def build_field_tensor(
     for name in field_names:
         if name not in table:
             raise KeyError(f"Missing field '{name}' in table")
-        columns.append(table[name])
+        # Copy to a contiguous float64 array so that downstream reshapes raise
+        # informative errors rather than low-level "buffer size" messages when
+        # the data length is incompatible with the requested grid.
+        columns.append(np.asarray(table[name], dtype=float).copy())
 
     lengths = {col.shape[0] for col in columns}
     if len(lengths) != 1:
@@ -277,9 +280,16 @@ def build_field_tensor(
     expected_size = h * w
     (length,) = lengths
     if length != expected_size:
-        raise ValueError("Grid shape does not match column length")
+        raise ValueError(
+            f"Grid shape {grid_shape} expects {expected_size} points but table provides {length}"
+        )
 
-    reshaped = [col.reshape(h, w) for col in columns]
+    try:
+        reshaped = [col.reshape(h, w) for col in columns]
+    except ValueError as exc:
+        raise ValueError(
+            f"Failed to reshape fields into grid {grid_shape}; verify the SU2 export resolution"
+        ) from exc
     return np.stack(reshaped, axis=0)
 
 
@@ -352,7 +362,10 @@ def su2_to_unet_snapshot(
             f"{surf_path}. Ensure you replaced 'path/to/…' with your SU2 surface file."
         )
 
-    vol_table = _load_volume_table(volume_solution)
+    try:
+        vol_table = _load_volume_table(volume_solution)
+    except Exception as exc:  # pragma: no cover - defensive logging for runtime exports
+        raise ValueError(f"Failed to read volume solution {volume_solution}: {exc}") from exc
 
     history_csv = history_path if history_path is not None else volume_solution.parent / "history.csv"
     cl, cd = _load_force_values(surface_forces, history_csv, cfg.cl_name, cfg.cd_name)

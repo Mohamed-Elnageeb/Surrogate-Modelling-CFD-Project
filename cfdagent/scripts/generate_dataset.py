@@ -67,7 +67,10 @@ def _run_single_simulation(
             snapshot_path = _create_snapshot(design_id, snapshot_spec, result)
             row["flow_path"] = relative_snapshot_path(snapshot_path)
         except Exception as exc:  # pylint: disable=broad-except
-            row["snapshot_error"] = str(exc)
+            duration = time.time() - start
+            skip_reason = f"snapshot failed: {exc}"
+            logger.warning("Skipping design %s due to snapshot failure: %s", design_id, exc)
+            return None, duration, skip_reason
     if not row["success"] and result.get("error"):
         row["error"] = result.get("error")
 
