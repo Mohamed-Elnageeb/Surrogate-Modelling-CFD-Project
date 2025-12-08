@@ -395,7 +395,17 @@ class AirfoilDesignAgent:
             design_id = str(uuid.uuid4())[:8]
             sim_result = self.run_function(design_id, vec, workdir=workdir, su2_executable=su2_executable)
             row = self._build_row(design_id, np.asarray(vec), design_columns, sim_result)
-            if sim_result.get("invalid_metrics") or not row.get("success", False):
+            if sim_result.get("invalid_metrics"):
+                row.setdefault(
+                    "error",
+                    sim_result.get(
+                        "error",
+                        "CFD run did not yield valid lift/drag metrics (check SU2 installation and case setup)",
+                    ),
+                )
+                failures.append(row)
+                continue
+            if not row.get("success", False):
                 row.setdefault(
                     "error",
                     sim_result.get(
