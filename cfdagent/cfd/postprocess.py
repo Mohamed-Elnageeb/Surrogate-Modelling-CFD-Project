@@ -69,7 +69,7 @@ def extract_metrics(history_file: Path) -> Dict[str, Any]:
             break
 
     def _sanitize_positive(value: float | None) -> float | None:
-        return value if value is None or value >= 0 else None
+        return None if value is None else abs(value)
 
     return {"Cl": _sanitize_positive(cl), "Cd": _sanitize_positive(cd), "residual": residual}
 
