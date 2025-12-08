@@ -197,7 +197,7 @@ def _extract_first(history: dict, *keys: str):
 
 
 def _sanitize_positive(value: float | int | None) -> float | None:
-    """Return ``None`` when a metric is negative to flag it as invalid."""
+    """Return a non-negative aerodynamic metric when the sign is unreliable."""
 
     if value is None:
         return None
@@ -205,7 +205,7 @@ def _sanitize_positive(value: float | int | None) -> float | None:
         numeric = float(value)
     except (TypeError, ValueError):
         return None
-    return numeric if numeric >= 0 else None
+    return abs(numeric)
 
 
 def _apply_su2_sign_convention(
@@ -586,14 +586,6 @@ def _regenerate_mesh_for_design(
             "airfoil_plot": airfoil_plot,
         }
 
-    # Silence the verbose meshing progress messages so downstream callers do
-    # not get flooded with terminal updates during batch runs.
-    try:  # pragma: no cover - optional convenience
-        gmsh.option.setNumber("General.Terminal", 0)
-        gmsh.option.setNumber("General.Verbosity", 0)
-    except Exception:
-        pass
-
     chord = max(float(coords[:, 0].max() - coords[:, 0].min()), 1e-3)
     farfield_radius = max(20.0 * chord, 5.0)
     mesh_size_airfoil = max(chord * 0.01, 1e-4)
@@ -601,6 +593,15 @@ def _regenerate_mesh_for_design(
     mesh_path = case_dir / mesh_basename
 
     gmsh.initialize()
+    # Silence the verbose meshing progress messages so downstream callers do
+    # not get flooded with terminal updates during batch runs. The calls must
+    # occur *after* initialization to avoid "Gmsh has not been initialized"
+    # stderr noise that confused users and cluttered logs.
+    try:  # pragma: no cover - optional convenience
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.option.setNumber("General.Verbosity", 0)
+    except Exception:
+        pass
     gmsh.model.add(f"airfoil_{design_id}")
 
     try:
