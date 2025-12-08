@@ -1,0 +1,9 @@
+Agent optimization review:
+Top 5 designs by score (Cl - 0.1*Cd):
+  • Design b09bb54a: Cl=0.160, Cd=0.0511, score=0.154
+  • Design 8832e945: Cl=0.088, Cd=0.0593, score=0.082
+  • Design da6b3eb4: Cl=0.086, Cd=0.0623, score=0.080
+  • Design 0994bd72: Cl=0.086, Cd=0.0626, score=0.080
+  • Design 7081b560: Cl=0.068, Cd=0.0499, score=0.063
+Benchmark: NACA0012_lowAoA (M=0.15, Re≈3e6, α≈2° (wind-tunnel data)). Reference Cl=0.320, Cd=0.0090. Agent best Cl=0.160, Cd=0.0511, score=0.154.
+Delta vs. benchmark: Δscore=-0.165, ΔCl=-0.160, ΔCd=+0.0421
