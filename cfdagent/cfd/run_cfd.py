@@ -1,17 +1,21 @@
 from __future__ import annotations
 
-import subprocess
-import shutil
+import logging
 import re
-from typing import Iterable
+import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterable
 
 import numpy as np
 
 
 from .postprocess import extract_metrics
 from ..geometry.airfoil_param import design_to_airfoil_coords
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -193,6 +197,51 @@ def _extract_first(history: dict, *keys: str):
             if value is None or value == "":
                 continue
             return value
+    return None
+
+
+def _extract_residual(history: dict) -> float | None:
+    """Extract the final residual from SU2 history data.
+
+    The helper prefers the ``rms[Rho]`` column that newer SU2 versions emit,
+    but falls back to a handful of legacy names commonly seen across releases.
+    If the column is present but non-numeric, or no known column exists, a
+    warning is logged and ``None`` is returned so callers can mark the run as
+    invalid.
+    """
+
+    preferred_key = "rms[Rho]"
+    fallback_keys: tuple[str, ...] = (
+        "Res_Rho",
+        "L2rho",
+        "RMS_RES",
+        "RMS_DENSITY",
+        "residual",
+    )
+
+    def _to_float(val: object, key: str) -> float | None:
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            logger.warning("Residual column %s is non-numeric (%r)", key, val)
+            return None
+
+    if preferred_key in history:
+        val = history.get(preferred_key)
+        if val not in (None, ""):
+            return _to_float(val, preferred_key)
+
+    for key in fallback_keys:
+        if key in history:
+            val = history.get(key)
+            if val in (None, ""):
+                continue
+            return _to_float(val, key)
+
+    logger.warning(
+        "No residual column found in history; checked %s",
+        (preferred_key,) + fallback_keys,
+    )
     return None
 
 
@@ -438,7 +487,7 @@ def run_cfd(
         if cd is None:
             cd = _extract_first(history, "CD", "CDtot", "cd", "Cd")
         if residual is None:
-            residual = _extract_first(history, "RMS_RES", "RMS_DENSITY", "residual")
+            residual = _extract_residual(history)
 
         cl, cd = _apply_su2_sign_convention(cl, cd, result.get("config_path"))
         cl = _sanitize_positive(cl)
@@ -447,16 +496,53 @@ def run_cfd(
         volume_output = _latest_output(case_dir, volume_stem or "flow_fields")
         surface_output = _latest_output(case_dir, surface_stem or "surface_airfoil")
 
-        missing_metrics = [name for name, value in {"Cl": cl, "Cd": cd}.items() if value is None]
-        invalid_metrics = bool(missing_metrics)
-        success = not missing_metrics
-        error_msg = (
-            f"Missing {','.join(missing_metrics)} metrics"
-            if missing_metrics
-            else None
-        )
+        validation_reasons: list[str] = []
+
+        for name, value in {"Cl": cl, "Cd": cd}.items():
+            if value is None:
+                validation_reasons.append(f"Missing {name} metric")
+            else:
+                try:
+                    numeric = float(value)
+                    if np.isnan(numeric):
+                        validation_reasons.append(f"{name} is NaN")
+                    elif numeric < 0:
+                        validation_reasons.append(f"{name} is negative ({numeric})")
+                    elif numeric > 10:
+                        validation_reasons.append(f"{name} exceeds limit ({numeric})")
+                except (TypeError, ValueError):
+                    validation_reasons.append(f"{name} is not numeric")
+
+        try:
+            residual_value = float(residual) if residual is not None else None
+        except (TypeError, ValueError):
+            residual_value = None
+        if residual_value is None:
+            validation_reasons.append("Residual is missing or non-numeric")
+        elif np.isnan(residual_value):
+            validation_reasons.append("Residual is NaN")
+        elif residual_value > 1e-2:
+            validation_reasons.append(f"Residual above threshold ({residual_value})")
+
+        invalid_metrics = bool(validation_reasons)
+        success = not invalid_metrics
+        error_msg = "; ".join(validation_reasons) if validation_reasons else None
+
         if invalid_metrics:
-            error_msg = error_msg or "Invalid lift/drag metrics (negative or missing)"
+            logger.warning("Design %s failed validation: %s", design_id, error_msg)
+
+        def _persist_debug_artifacts():
+            debug_dir = case_dir / "debug"
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            for artifact in (airfoil_plot, mesh_plot, mesh_path):
+                if artifact and Path(artifact).exists():
+                    try:
+                        shutil.copy(Path(artifact), debug_dir / Path(artifact).name)
+                    except OSError:
+                        pass
+
+        if not success:
+            _persist_debug_artifacts()
 
         return {
             "design_id": design_id,
