@@ -208,6 +208,44 @@ def _sanitize_positive(value: float | int | None) -> float | None:
     return numeric if numeric >= 0 else None
 
 
+def _apply_su2_sign_convention(
+    cl: float | int | None, cd: float | int | None, cfg_path: Path | None
+) -> tuple[float | int | None, float | int | None]:
+    """Align lift/drag signs with SU2's aerodynamic convention.
+
+    Per the SU2 user guide, a positive ``AOA`` rotates the freestream vector
+    clockwise around the z-axis (for 2D airfoils in the *xy*-plane). When users
+    supply ``AOA`` using the opposite "nose-up" convention, the reported
+    coefficients can appear flipped (negative lift and drag). To present
+    physically meaningful magnitudes, we detect this mismatch and flip the
+    signs accordingly.
+    """
+
+    if cl is None and cd is None:
+        return cl, cd
+
+    try:
+        aoa = float(_config_value(cfg_path, "AOA", "nan")) if cfg_path else float("nan")
+    except (TypeError, ValueError):
+        aoa = float("nan")
+
+    def _abs_or_none(val: float | int | None) -> float | int | None:
+        return None if val is None else abs(val)
+
+    if np.isnan(aoa):
+        return cl, _abs_or_none(cd)
+
+    # If the angle-of-attack and lift signs disagree, flip both coefficients to
+    # match the SU2 documentation (positive lift for positive AOA).
+    if cl is not None and float(cl) * aoa < 0:
+        cl = -float(cl)
+        cd = _abs_or_none(cd)
+    else:
+        cd = _abs_or_none(cd)
+
+    return cl, cd
+
+
 def _config_value(cfg_path: Path, key: str, default: str | None = None) -> str | None:
     """Return the value assigned to ``key`` in a SU2 config, if present."""
 
@@ -402,6 +440,7 @@ def run_cfd(
         if residual is None:
             residual = _extract_first(history, "RMS_RES", "RMS_DENSITY", "residual")
 
+        cl, cd = _apply_su2_sign_convention(cl, cd, result.get("config_path"))
         cl = _sanitize_positive(cl)
         cd = _sanitize_positive(cd)
 
@@ -546,6 +585,14 @@ def _regenerate_mesh_for_design(
             "error": "The Gmsh Python API is required to regenerate meshes. Install gmsh to continue.",
             "airfoil_plot": airfoil_plot,
         }
+
+    # Silence the verbose meshing progress messages so downstream callers do
+    # not get flooded with terminal updates during batch runs.
+    try:  # pragma: no cover - optional convenience
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.option.setNumber("General.Verbosity", 0)
+    except Exception:
+        pass
 
     chord = max(float(coords[:, 0].max() - coords[:, 0].min()), 1e-3)
     farfield_radius = max(20.0 * chord, 5.0)

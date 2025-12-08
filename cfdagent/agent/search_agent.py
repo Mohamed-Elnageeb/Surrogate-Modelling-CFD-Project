@@ -308,6 +308,9 @@ class AirfoilDesignAgent:
         for col in design_columns:
             if col not in df.columns:
                 df[col] = np.nan
+        for metric in ("Cl", "Cd"):
+            if metric not in df.columns:
+                df[metric] = np.nan
         df["score"] = scores
         df = df.dropna(subset=design_columns + ["Cl", "Cd", "score"], how="any")
         if df.empty:
