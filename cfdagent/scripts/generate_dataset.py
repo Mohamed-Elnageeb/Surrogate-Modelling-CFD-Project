@@ -1,9 +1,12 @@
 import argparse
 import concurrent.futures
+import logging
 import time
 import uuid
 from pathlib import Path
 from typing import Tuple
+
+import numpy as np
 
 from ..geometry.airfoil_param import sample_random_design
 from ..cfd.run_cfd import run_cfd
@@ -13,6 +16,9 @@ from ..utils.snapshot_pipeline import (
     relative_snapshot_path,
 )
 from ..utils.io_utils import append_design_result
+
+
+logger = logging.getLogger(__name__)
 
 
 def _create_snapshot(design_id: str, spec: SnapshotSpec, run_result: dict) -> Path:
@@ -34,13 +40,15 @@ def _run_single_simulation(
     """
 
     start = time.time()
-    design_vec = sample_random_design()
+    design_vec = np.clip(sample_random_design(), -0.02, 0.02)
     design_id = str(uuid.uuid4())[:8]
     result = run_cfd(design_id, design_vec)
 
-    if result.get("invalid_metrics"):
+    if result.get("invalid_metrics") or not result.get("success"):
         duration = time.time() - start
-        return None, duration, "invalid_metrics"
+        skip_reason = result.get("error") or "invalid_metrics"
+        logger.warning("Skipping design %s: %s", design_id, skip_reason)
+        return None, duration, skip_reason
 
     row = {"design_id": design_id}
     for idx in range(5):
@@ -59,7 +67,10 @@ def _run_single_simulation(
             snapshot_path = _create_snapshot(design_id, snapshot_spec, result)
             row["flow_path"] = relative_snapshot_path(snapshot_path)
         except Exception as exc:  # pylint: disable=broad-except
-            row["snapshot_error"] = str(exc)
+            duration = time.time() - start
+            skip_reason = f"snapshot failed: {exc}"
+            logger.warning("Skipping design %s due to snapshot failure: %s", design_id, exc)
+            return None, duration, skip_reason
     if not row["success"] and result.get("error"):
         row["error"] = result.get("error")
 
