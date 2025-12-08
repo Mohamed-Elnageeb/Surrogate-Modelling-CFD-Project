@@ -125,8 +125,27 @@ solver while a physics-aware U‑Net accelerates design exploration.
    su2_to_unet_snapshot(volume_table, surface_forces, snapshot_out, cfg)
    PY
 
-   # Windows / shells without here-doc support (condense the script onto one line)
-   python -c "from pathlib import Path; from cfdagent.surrogate.snapshot_builder import SnapshotConfig, su2_to_unet_snapshot; cfg = SnapshotConfig(input_fields=['Mach','p','T'], target_fields=['u','v','p'], grid_shape=(128,256), cl_name='CL', cd_name='CD'); volume_table = Path(r'path\\to\\volume_solution.dat'); surface_forces = Path(r'path\\to\\forces_breakdown.dat'); snapshot_out = Path(r'data\\snapshots\\case01.npz'); snapshot_out.parent.mkdir(parents=True, exist_ok=True); su2_to_unet_snapshot(volume_table, surface_forces, snapshot_out, cfg)"  # Replace paths with real SU2 outputs
+   # Windows 11 PowerShell (paste as-is; edit the C:\\ paths first)
+   @'
+   from pathlib import Path
+   from cfdagent.surrogate.snapshot_builder import SnapshotConfig, su2_to_unet_snapshot
+
+   cfg = SnapshotConfig(
+       input_fields=["Mach", "p", "T"],
+       target_fields=["u", "v", "p"],
+       grid_shape=(128, 256),
+       cl_name="CL",
+       cd_name="CD",
+   )
+
+   volume_table = Path(r"C:\\path\\to\\your\\volume_solution.dat")
+   surface_forces = Path(r"C:\\path\\to\\your\\forces_breakdown.dat")
+   snapshot_out = Path(r"data\\snapshots\\case01.npz")
+   snapshot_out.parent.mkdir(parents=True, exist_ok=True)
+
+   su2_to_unet_snapshot(volume_table, surface_forces, snapshot_out, cfg)
+   '@ | py -
+   # (Replace the C:\\path placeholders with your actual SU2 outputs; otherwise a FileNotFoundError is expected.)
    ```
 
 2. **Train the model.** Point the training CLI at the directory containing your

@@ -338,10 +338,19 @@ def su2_to_unet_snapshot(
         - 'cd'
     """
 
-    if not volume_solution.exists():
-        raise FileNotFoundError(f"Volume solution not found: {volume_solution}")
-    if surface_forces is not None and not surface_forces.exists():
-        raise FileNotFoundError(f"Surface force file not found: {surface_forces}")
+    vol_path = Path(volume_solution)
+    surf_path = Path(surface_forces) if surface_forces is not None else None
+
+    if not vol_path.exists():
+        raise FileNotFoundError(
+            "Volume solution not found: "
+            f"{vol_path}. Ensure you replaced 'path/to/…' with your SU2 output file."
+        )
+    if surf_path is not None and not surf_path.exists():
+        raise FileNotFoundError(
+            "Surface force file not found: "
+            f"{surf_path}. Ensure you replaced 'path/to/…' with your SU2 surface file."
+        )
 
     vol_table = _load_volume_table(volume_solution)
 
