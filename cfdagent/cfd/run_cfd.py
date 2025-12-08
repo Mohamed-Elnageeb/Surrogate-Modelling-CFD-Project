@@ -200,6 +200,51 @@ def _extract_first(history: dict, *keys: str):
     return None
 
 
+def _extract_residual(history: dict) -> float | None:
+    """Extract the final residual from SU2 history data.
+
+    The helper prefers the ``rms[Rho]`` column that newer SU2 versions emit,
+    but falls back to a handful of legacy names commonly seen across releases.
+    If the column is present but non-numeric, or no known column exists, a
+    warning is logged and ``None`` is returned so callers can mark the run as
+    invalid.
+    """
+
+    preferred_key = "rms[Rho]"
+    fallback_keys: tuple[str, ...] = (
+        "Res_Rho",
+        "L2rho",
+        "RMS_RES",
+        "RMS_DENSITY",
+        "residual",
+    )
+
+    def _to_float(val: object, key: str) -> float | None:
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            logger.warning("Residual column %s is non-numeric (%r)", key, val)
+            return None
+
+    if preferred_key in history:
+        val = history.get(preferred_key)
+        if val not in (None, ""):
+            return _to_float(val, preferred_key)
+
+    for key in fallback_keys:
+        if key in history:
+            val = history.get(key)
+            if val in (None, ""):
+                continue
+            return _to_float(val, key)
+
+    logger.warning(
+        "No residual column found in history; checked %s",
+        (preferred_key,) + fallback_keys,
+    )
+    return None
+
+
 def _sanitize_positive(value: float | int | None) -> float | None:
     """Return a non-negative aerodynamic metric when the sign is unreliable."""
 
