@@ -338,6 +338,11 @@ def su2_to_unet_snapshot(
         - 'cd'
     """
 
+    if not volume_solution.exists():
+        raise FileNotFoundError(f"Volume solution not found: {volume_solution}")
+    if surface_forces is not None and not surface_forces.exists():
+        raise FileNotFoundError(f"Surface force file not found: {surface_forces}")
+
     vol_table = _load_volume_table(volume_solution)
 
     history_csv = history_path if history_path is not None else volume_solution.parent / "history.csv"
