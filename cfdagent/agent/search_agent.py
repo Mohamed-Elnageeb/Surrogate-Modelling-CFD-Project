@@ -356,7 +356,7 @@ class AirfoilDesignAgent:
 
         self.report_dir.mkdir(parents=True, exist_ok=True)
         review_file = self.report_dir / "review.txt"
-        review_file.write_text(review_text)
+        review_file.write_text(review_text, encoding="utf-8")
 
         return {
             "review": review_text,
