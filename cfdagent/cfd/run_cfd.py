@@ -11,7 +11,7 @@ from typing import Iterable
 import numpy as np
 
 
-from .postprocess import extract_metrics
+from .postprocess import RESIDUAL_COLUMNS, extract_metrics, extract_residual_from_history
 from ..geometry.airfoil_param import design_to_airfoil_coords
 
 
@@ -312,6 +312,27 @@ def _config_value(cfg_path: Path, key: str, default: str | None = None) -> str |
     return default
 
 
+def _parse_vector(cfg_path: Path | None, key: str) -> tuple[float, float, float] | None:
+    """Return a three-component vector from a SU2 config if available."""
+
+    if cfg_path is None:
+        return None
+
+    raw_value = _config_value(cfg_path, key)
+    if raw_value is None:
+        return None
+
+    try:
+        parts = [float(part) for part in raw_value.replace(",", " ").split() if part]
+    except ValueError:
+        return None
+
+    if len(parts) != 3:
+        return None
+
+    return tuple(parts)  # type: ignore[return-value]
+
+
 def _latest_output(
     workdir: Path, stem: str, preferred_exts: tuple[str, ...] | None = None
 ) -> Path | None:
@@ -445,6 +466,8 @@ def run_cfd(
         cfg.su2_executable = su2_executable
 
     base_cfg = case_dir / cfg.base_config_name
+    drag_dir = _parse_vector(base_cfg, "DRAG_DIR")
+    lift_dir = _parse_vector(base_cfg, "LIFT_DIR")
     volume_stem = _config_value(base_cfg, "VOLUME_FILENAME", "flow_fields")
     surface_stem = _config_value(base_cfg, "SURFACE_FILENAME", "surface_airfoil")
 
@@ -477,6 +500,7 @@ def run_cfd(
         result = run_su2_case(cfg, param_overrides=param_overrides)
         history = result.get("history_data") or {}
         metrics = extract_metrics(result.get("history_path")) if result.get("history_path") else {}
+        config_path = result.get("config_path") or base_cfg
 
         cl = metrics.get("Cl") if metrics else None
         cd = metrics.get("Cd") if metrics else None
@@ -487,11 +511,37 @@ def run_cfd(
         if cd is None:
             cd = _extract_first(history, "CD", "CDtot", "cd", "Cd")
         if residual is None:
-            residual = _extract_residual(history)
+            residual = extract_residual_from_history(history)
+            if residual is None:
+                logger.warning(
+                    "No residual column found in history; checked %s",
+                    RESIDUAL_COLUMNS,
+                )
 
-        cl, cd = _apply_su2_sign_convention(cl, cd, result.get("config_path"))
+        raw_cl, raw_cd = cl, cd
+        cl, cd = _apply_su2_sign_convention(cl, cd, config_path)
         cl = _sanitize_positive(cl)
         cd = _sanitize_positive(cd)
+
+        def _log_negative_cd_warning():
+            if raw_cd is None:
+                return
+            try:
+                cd_value = float(raw_cd)
+            except (TypeError, ValueError):
+                return
+            if cd_value < 0:
+                logger.warning(
+                    "Design %s reported negative Cd before sign correction (%.3g). "
+                    "Check DRAG_DIR=%s, LIFT_DIR=%s, AOA=%s, and mesh convergence for setup issues.",
+                    design_id,
+                    cd_value,
+                    drag_dir or "unknown",
+                    lift_dir or "unknown",
+                    _config_value(config_path, "AOA", "unknown"),
+                )
+
+        _log_negative_cd_warning()
 
         volume_output = _latest_output(case_dir, volume_stem or "flow_fields")
         surface_output = _latest_output(case_dir, surface_stem or "surface_airfoil")
