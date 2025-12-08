@@ -22,6 +22,19 @@ def sample_random_design(low: float = -0.02, high: float = 0.02, rng: np.random.
     return vec.astype(np.float32)
 
 
+def _smooth_control_points(ctrl: np.ndarray) -> np.ndarray:
+    """Apply a lightweight moving-average filter to dampen jagged shapes."""
+
+    kernel = np.array([0.25, 0.5, 0.25], dtype=np.float32)
+    padded = np.pad(ctrl.astype(np.float32), (1, 1), mode="edge")
+    smoothed = (
+        kernel[0] * padded[:-2]
+        + kernel[1] * padded[1:-1]
+        + kernel[2] * padded[2:]
+    )
+    return smoothed
+
+
 def design_to_airfoil_coords(design_vec: np.ndarray, n_points: int = 200) -> np.ndarray:
     """
     Convert a 10-D design vector into airfoil surface coordinates.
@@ -50,8 +63,8 @@ def design_to_airfoil_coords(design_vec: np.ndarray, n_points: int = 200) -> np.
     theta = np.linspace(0.0, np.pi, n_points)
     x = 0.5 * (1.0 - np.cos(theta))
 
-    camber_ctrl = design_vec[:N_CAMBER]
-    thickness_ctrl = design_vec[N_CAMBER:]
+    camber_ctrl = _smooth_control_points(design_vec[:N_CAMBER])
+    thickness_ctrl = _smooth_control_points(design_vec[N_CAMBER:])
 
     camber_offsets = np.interp(x, CONTROL_X, camber_ctrl, left=camber_ctrl[0], right=camber_ctrl[-1])
     thickness_offsets = np.interp(x, CONTROL_X, thickness_ctrl, left=thickness_ctrl[0], right=thickness_ctrl[-1])

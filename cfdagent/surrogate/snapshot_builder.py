@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -176,30 +180,51 @@ def _load_vtu_table(path: Path) -> Dict[str, np.ndarray]:
     except ImportError as exc:  # pragma: no cover - exercised in integration
         raise ImportError("meshio is required to read VTU files") from exc
 
-    mesh = meshio.read(path)
     table: Dict[str, np.ndarray] = {}
 
-    for name, array in mesh.point_data.items():
-        data = np.asarray(array)
-        if data.ndim == 1:
-            table[name] = data.astype(float)
-            continue
+    def _convert_mesh(mesh_obj) -> Dict[str, np.ndarray]:
+        converted: Dict[str, np.ndarray] = {}
+        for name, array in mesh_obj.point_data.items():
+            data = np.asarray(array)
+            if data.ndim == 1:
+                converted[name] = data.astype(float)
+                continue
 
-        if data.ndim == 2:
-            # Expose each component separately, both generically (name_0, name_1)
-            # and with common aliases for velocity-like vectors.
-            for idx in range(data.shape[1]):
-                table[f"{name}_{idx}"] = data[:, idx].astype(float)
+            if data.ndim == 2:
+                for idx in range(data.shape[1]):
+                    converted[f"{name}_{idx}"] = data[:, idx].astype(float)
 
-            lower = name.lower()
-            if lower in {"velocity", "momentum"}:
-                component_names = ("u", "v", "w")
-                for idx, comp in enumerate(component_names):
-                    if idx < data.shape[1]:
-                        table[comp] = data[:, idx].astype(float)
-            continue
+                lower = name.lower()
+                if lower in {"velocity", "momentum"}:
+                    component_names = ("u", "v", "w")
+                    for idx, comp in enumerate(component_names):
+                        if idx < data.shape[1]:
+                            converted[comp] = data[:, idx].astype(float)
+                continue
 
-        # Skip higher dimensional arrays; they are unlikely to be scalar fields.
+            # Skip higher dimensional arrays; they are unlikely to be scalar fields.
+        return converted
+
+    try:
+        mesh = meshio.read(path)
+        table = _convert_mesh(mesh)
+    except Exception as exc:  # pragma: no cover - defensive fallback for truncated VTU
+        msg = str(exc).lower()
+        if "buffer size" not in msg and "not enough data" not in msg:
+            raise
+
+        logger.warning(
+            "meshio could not read VTU %s (%s); attempting pyvista fallback", path, exc
+        )
+        try:
+            import pyvista as pv
+
+            dataset = pv.read(path)
+            table = _convert_mesh(dataset)
+        except Exception as pv_exc:  # pragma: no cover - optional dependency
+            raise ValueError(
+                f"Failed to read VTU {path} with meshio and pyvista: {exc}; {pv_exc}"
+            ) from exc
 
     return table
 
@@ -267,7 +292,10 @@ def build_field_tensor(
     for name in field_names:
         if name not in table:
             raise KeyError(f"Missing field '{name}' in table")
-        columns.append(table[name])
+        # Copy to a contiguous float64 array so that downstream reshapes raise
+        # informative errors rather than low-level "buffer size" messages when
+        # the data length is incompatible with the requested grid.
+        columns.append(np.asarray(table[name], dtype=float).copy())
 
     lengths = {col.shape[0] for col in columns}
     if len(lengths) != 1:
@@ -277,9 +305,16 @@ def build_field_tensor(
     expected_size = h * w
     (length,) = lengths
     if length != expected_size:
-        raise ValueError("Grid shape does not match column length")
+        raise ValueError(
+            f"Grid shape {grid_shape} expects {expected_size} points but table provides {length}"
+        )
 
-    reshaped = [col.reshape(h, w) for col in columns]
+    try:
+        reshaped = [col.reshape(h, w) for col in columns]
+    except ValueError as exc:
+        raise ValueError(
+            f"Failed to reshape fields into grid {grid_shape}; verify the SU2 export resolution"
+        ) from exc
     return np.stack(reshaped, axis=0)
 
 
@@ -352,7 +387,10 @@ def su2_to_unet_snapshot(
             f"{surf_path}. Ensure you replaced 'path/to/…' with your SU2 surface file."
         )
 
-    vol_table = _load_volume_table(volume_solution)
+    try:
+        vol_table = _load_volume_table(volume_solution)
+    except Exception as exc:  # pragma: no cover - defensive logging for runtime exports
+        raise ValueError(f"Failed to read volume solution {volume_solution}: {exc}") from exc
 
     history_csv = history_path if history_path is not None else volume_solution.parent / "history.csv"
     cl, cd = _load_force_values(surface_forces, history_csv, cfg.cl_name, cfg.cd_name)
