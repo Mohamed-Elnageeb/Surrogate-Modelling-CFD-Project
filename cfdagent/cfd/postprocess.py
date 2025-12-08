@@ -1,7 +1,17 @@
 from pathlib import Path
 from typing import Any, Dict
 import csv
+
 import numpy as np
+
+RESIDUAL_COLUMNS: tuple[str, ...] = (
+    "rms[Rho]",
+    "Res_Rho",
+    "L2rho",
+    "RMS_RES",
+    "RMS_DENSITY",
+    "residual",
+)
 
 
 def _clean_field_name(name: str) -> str:
@@ -13,6 +23,24 @@ def _clean_field_name(name: str) -> str:
     """
 
     return name.strip().strip('"')
+
+
+def _normalize_history_key(name: str) -> str:
+    """Normalize history column names for case-insensitive lookup."""
+
+    return _clean_field_name(name).lower()
+
+
+def _as_float(value: str | None) -> float | None:
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
 
 def extract_metrics(history_file: Path) -> Dict[str, Any]:
     """
@@ -39,16 +67,7 @@ def extract_metrics(history_file: Path) -> Dict[str, Any]:
     if last_row is None:
         return {"Cl": None, "Cd": None, "residual": None}
 
-    def _as_float(value: str | None) -> float | None:
-        if value is None:
-            return None
-        value = value.strip()
-        if not value:
-            return None
-        try:
-            return float(value)
-        except ValueError:
-            return None
+    normalized_row = {_normalize_history_key(k): v for k, v in last_row.items()}
 
     cl = None
     for key in ("CL", "CLtot", "cl", "Cl"):
@@ -63,8 +82,10 @@ def extract_metrics(history_file: Path) -> Dict[str, Any]:
             break
 
     residual = None
-    for key in ("RMS_RES", "RMS_DENSITY", "residual"):
+    for key in RESIDUAL_COLUMNS:
         residual = _as_float(last_row.get(key))
+        if residual is None:
+            residual = _as_float(normalized_row.get(_normalize_history_key(key)))
         if residual is not None:
             break
 
@@ -76,6 +97,24 @@ def extract_metrics(history_file: Path) -> Dict[str, Any]:
         return value if value > 0 else None
 
     return {"Cl": _sanitize_positive(cl), "Cd": _sanitize_positive(cd), "residual": residual}
+
+
+def extract_residual_from_history(history: Dict[str, Any]) -> float | None:
+    """Return the residual from an already-parsed SU2 history row."""
+
+    if not history:
+        return None
+
+    normalized = {_normalize_history_key(k): v for k, v in history.items()}
+    for key in RESIDUAL_COLUMNS:
+        value = history.get(key)
+        if value is None:
+            value = normalized.get(_normalize_history_key(key))
+        residual = _as_float(str(value)) if value is not None else None
+        if residual is not None:
+            return residual
+
+    return None
 
 
 def save_flowfield(solution_dir: Path, out_path: Path) -> None:
