@@ -356,7 +356,7 @@ class AirfoilDesignAgent:
 
         self.report_dir.mkdir(parents=True, exist_ok=True)
         review_file = self.report_dir / "review.txt"
-        review_file.write_text(review_text)
+        review_file.write_text(review_text, encoding="utf-8")
 
         return {
             "review": review_text,
@@ -394,16 +394,19 @@ class AirfoilDesignAgent:
         for vec in candidates:
             design_id = str(uuid.uuid4())[:8]
             sim_result = self.run_function(design_id, vec, workdir=workdir, su2_executable=su2_executable)
-            if sim_result.get("invalid_metrics"):
-                sim_result.setdefault("success", False)
-                sim_result.setdefault(
-                    "error",
-                    "CFD run did not yield valid lift/drag metrics (check SU2 installation and case setup)",
-                )
-                failures.append(sim_result)
-                results.append(sim_result)
-                continue
             row = self._build_row(design_id, np.asarray(vec), design_columns, sim_result)
+            if sim_result.get("invalid_metrics") or not row.get("success", False):
+                row.setdefault(
+                    "error",
+                    sim_result.get(
+                        "error",
+                        "CFD run did not yield valid lift/drag metrics (check SU2 installation and case setup)",
+                    ),
+                )
+                failures.append(row)
+                self._append_row(row)
+                results.append(row)
+                continue
             if snapshot_spec and row.get("success"):
                 try:
                     snapshot_path = create_snapshot_from_run(design_id, snapshot_spec, sim_result)
