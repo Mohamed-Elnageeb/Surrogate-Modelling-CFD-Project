@@ -245,54 +245,21 @@ def _extract_residual(history: dict) -> float | None:
     return None
 
 
-def _sanitize_positive(value: float | int | None) -> float | None:
-    """Return a non-negative aerodynamic metric when the sign is unreliable."""
+def _coerce_float(value: float | int | None) -> float | None:
+    """Return ``value`` as a float without altering its sign, or ``None``.
+
+    Lift and drag are reported exactly as the solver computed them; sign
+    correction and abs() heuristics were removed because they masked genuine
+    reference-frame (DRAG_DIR/LIFT_DIR/AOA) setup errors and destroyed the sign
+    of the lift the optimizer depends on.
+    """
 
     if value is None:
         return None
     try:
-        numeric = float(value)
+        return float(value)
     except (TypeError, ValueError):
         return None
-    return abs(numeric)
-
-
-def _apply_su2_sign_convention(
-    cl: float | int | None, cd: float | int | None, cfg_path: Path | None
-) -> tuple[float | int | None, float | int | None]:
-    """Align lift/drag signs with SU2's aerodynamic convention.
-
-    Per the SU2 user guide, a positive ``AOA`` rotates the freestream vector
-    clockwise around the z-axis (for 2D airfoils in the *xy*-plane). When users
-    supply ``AOA`` using the opposite "nose-up" convention, the reported
-    coefficients can appear flipped (negative lift and drag). To present
-    physically meaningful magnitudes, we detect this mismatch and flip the
-    signs accordingly.
-    """
-
-    if cl is None and cd is None:
-        return cl, cd
-
-    try:
-        aoa = float(_config_value(cfg_path, "AOA", "nan")) if cfg_path else float("nan")
-    except (TypeError, ValueError):
-        aoa = float("nan")
-
-    def _abs_or_none(val: float | int | None) -> float | int | None:
-        return None if val is None else abs(val)
-
-    if np.isnan(aoa):
-        return cl, _abs_or_none(cd)
-
-    # If the angle-of-attack and lift signs disagree, flip both coefficients to
-    # match the SU2 documentation (positive lift for positive AOA).
-    if cl is not None and float(cl) * aoa < 0:
-        cl = -float(cl)
-        cd = _abs_or_none(cd)
-    else:
-        cd = _abs_or_none(cd)
-
-    return cl, cd
 
 
 def _config_value(cfg_path: Path, key: str, default: str | None = None) -> str | None:
@@ -519,9 +486,13 @@ def run_cfd(
                 )
 
         raw_cl, raw_cd = cl, cd
-        cl, cd = _apply_su2_sign_convention(cl, cd, config_path)
-        cl = _sanitize_positive(cl)
-        cd = _sanitize_positive(cd)
+        # Report lift and drag exactly as SU2 computed them. Previously the
+        # coefficients were passed through abs()/sign-flipping heuristics, which
+        # masked genuine reference-frame setup errors (DRAG_DIR/LIFT_DIR/AOA) and
+        # destroyed the sign of the lift the optimizer relies on. Negative drag
+        # is still surfaced as a validation failure below rather than hidden.
+        cl = _coerce_float(cl)
+        cd = _coerce_float(cd)
 
         def _log_negative_cd_warning():
             if raw_cd is None:
@@ -556,9 +527,12 @@ def run_cfd(
                     numeric = float(value)
                     if np.isnan(numeric):
                         validation_reasons.append(f"{name} is NaN")
-                    elif numeric < 0:
+                    # Lift may be negative (physically valid); only drag is
+                    # rejected for a negative sign, which signals a broken or
+                    # unconverged run rather than a real design.
+                    elif name == "Cd" and numeric < 0:
                         validation_reasons.append(f"{name} is negative ({numeric})")
-                    elif numeric > 10:
+                    elif abs(numeric) > 10:
                         validation_reasons.append(f"{name} exceeds limit ({numeric})")
                 except (TypeError, ValueError):
                     validation_reasons.append(f"{name} is not numeric")

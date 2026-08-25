@@ -89,14 +89,12 @@ def extract_metrics(history_file: Path) -> Dict[str, Any]:
         if residual is not None:
             break
 
-    def _sanitize_positive(value: float | None) -> float | None:
-        """Return positive values unchanged and drop non-positive entries."""
-
-        if value is None:
-            return None
-        return value if value > 0 else None
-
-    return {"Cl": _sanitize_positive(cl), "Cd": _sanitize_positive(cd), "residual": residual}
+    # Preserve the sign of the coefficients. Negative lift is physically
+    # meaningful (e.g. a design at negative effective incidence) and the
+    # optimizer needs it; discarding or flipping it corrupts the search. Only
+    # genuinely non-physical results (negative drag, NaNs) are rejected later,
+    # during validation in ``run_cfd``.
+    return {"Cl": cl, "Cd": cd, "residual": residual}
 
 
 def extract_residual_from_history(history: Dict[str, Any]) -> float | None:

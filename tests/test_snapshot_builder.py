@@ -135,13 +135,30 @@ x,y,p,u,v
     )
     table = read_su2_table(volume_path)
 
+    # The four nodes sit on the corners of the unit square, so interpolating
+    # onto a matching 2x2 grid reproduces the nodal values exactly.
     tensor = build_field_tensor(table, ["p", "u"], grid_shape=(2, 2))
     assert tensor.shape == (2, 2, 2)
     assert np.allclose(tensor[0].flatten(), table["p"])
     assert np.allclose(tensor[1].flatten(), table["u"])
 
+    # A different grid resolution is now valid: the scattered fields are
+    # interpolated onto it rather than requiring len(column) == H * W.
+    resampled = build_field_tensor(table, ["p", "u"], grid_shape=(3, 2))
+    assert resampled.shape == (2, 3, 2)
+    assert np.all(np.isfinite(resampled))
+
+
+def test_build_field_tensor_reshapes_without_coordinates():
+    # With no coordinate columns the loader falls back to a direct reshape and
+    # still enforces the H * W size contract.
+    table = {"p": np.arange(4, dtype=float)}
+    tensor = build_field_tensor(table, ["p"], grid_shape=(2, 2))
+    assert tensor.shape == (1, 2, 2)
+    assert np.allclose(tensor[0].flatten(), table["p"])
+
     with pytest.raises(ValueError):
-        build_field_tensor(table, ["p", "u"], grid_shape=(3, 2))
+        build_field_tensor(table, ["p"], grid_shape=(3, 2))
 
 
 def test_extract_forces_uses_last_entry():

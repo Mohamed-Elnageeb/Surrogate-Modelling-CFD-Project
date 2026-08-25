@@ -13,10 +13,12 @@ def test_extract_metrics_handles_quoted_headers(tmp_path: Path) -> None:
 
     metrics = extract_metrics(history)
 
-    assert metrics == {"Cl": 0.242, "Cd": 0.177, "residual": None}
+    # ``rms[Rho]`` is a recognised residual column, so its last value is
+    # returned; the coefficients keep their parsed values.
+    assert metrics == {"Cl": 0.242, "Cd": 0.177, "residual": -2.88}
 
 
-def test_extract_metrics_discards_negative_coefficients(tmp_path: Path) -> None:
+def test_extract_metrics_preserves_negative_coefficients(tmp_path: Path) -> None:
     history = tmp_path / "history.csv"
     history.write_text(
         """CL,CD
@@ -26,4 +28,6 @@ def test_extract_metrics_discards_negative_coefficients(tmp_path: Path) -> None:
 
     metrics = extract_metrics(history)
 
-    assert metrics == {"Cl": None, "Cd": None, "residual": None}
+    # The sign of the coefficients is preserved. Negative lift is physically
+    # meaningful; downstream validation decides whether a run is usable.
+    assert metrics == {"Cl": -0.01, "Cd": -0.02, "residual": None}

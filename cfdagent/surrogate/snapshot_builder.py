@@ -184,6 +184,17 @@ def _load_vtu_table(path: Path) -> Dict[str, np.ndarray]:
 
     def _convert_mesh(mesh_obj) -> Dict[str, np.ndarray]:
         converted: Dict[str, np.ndarray] = {}
+
+        # Expose nodal coordinates so downstream code can interpolate the
+        # unstructured solution onto a regular grid. SU2 volume meshes are not
+        # Cartesian, so the raw node ordering cannot simply be reshaped.
+        points = np.asarray(getattr(mesh_obj, "points", []), dtype=float)
+        if points.ndim == 2 and points.shape[1] >= 2:
+            converted["x"] = points[:, 0]
+            converted["y"] = points[:, 1]
+            if points.shape[1] >= 3:
+                converted["z"] = points[:, 2]
+
         for name, array in mesh_obj.point_data.items():
             data = np.asarray(array)
             if data.ndim == 1:
@@ -263,6 +274,69 @@ def _load_force_values(
     return _load_history_forces(history_path, cl_name, cd_name)
 
 
+_COORD_KEY_CANDIDATES: Tuple[Tuple[str, str], ...] = (
+    ("x", "y"),
+    ("X", "Y"),
+    ("Points_0", "Points_1"),
+    ("x_coord", "y_coord"),
+    ("Points:0", "Points:1"),
+)
+
+
+def _find_coordinates(table: Dict[str, np.ndarray]) -> Tuple[np.ndarray, np.ndarray] | None:
+    """Return nodal (x, y) coordinate arrays from a table, if present."""
+
+    for x_key, y_key in _COORD_KEY_CANDIDATES:
+        if x_key in table and y_key in table:
+            x = np.asarray(table[x_key], dtype=float)
+            y = np.asarray(table[y_key], dtype=float)
+            if x.shape == y.shape and x.ndim == 1:
+                return x, y
+    return None
+
+
+def _interpolate_to_grid(
+    columns: Sequence[np.ndarray],
+    x: np.ndarray,
+    y: np.ndarray,
+    grid_shape: Tuple[int, int],
+) -> np.ndarray:
+    """Interpolate scattered nodal fields onto a regular (H, W) grid.
+
+    SU2 volume solutions live on an unstructured mesh, so the flat node ordering
+    is not a Cartesian grid and must not be reshaped directly. We sample each
+    field onto a uniform grid spanning the mesh bounding box using linear
+    interpolation, then backfill any points outside the convex hull with a
+    nearest-neighbour value so the resulting image has no holes.
+    """
+
+    from scipy.interpolate import griddata
+
+    h, w = grid_shape
+    finite = np.isfinite(x) & np.isfinite(y)
+    if finite.sum() < 3:
+        raise ValueError("Need at least 3 valid nodes to interpolate onto a grid")
+
+    x = x[finite]
+    y = y[finite]
+    pts = np.column_stack([x, y])
+
+    x_lin = np.linspace(float(x.min()), float(x.max()), w)
+    y_lin = np.linspace(float(y.min()), float(y.max()), h)
+    grid_x, grid_y = np.meshgrid(x_lin, y_lin)  # both (H, W), row index = y
+
+    channels = []
+    for col in columns:
+        values = col[finite]
+        gridded = griddata(pts, values, (grid_x, grid_y), method="linear")
+        holes = ~np.isfinite(gridded)
+        if holes.any():
+            filler = griddata(pts, values, (grid_x, grid_y), method="nearest")
+            gridded[holes] = filler[holes]
+        channels.append(gridded)
+    return np.stack(channels, axis=0)
+
+
 def build_field_tensor(
     table: Dict[str, np.ndarray],
     field_names: Sequence[str],
@@ -271,18 +345,25 @@ def build_field_tensor(
     """
     From a table of column arrays and a list of field names, build a 3D tensor.
 
+    When the table carries nodal coordinates (``x``/``y`` or an equivalent pair),
+    the scattered fields are interpolated onto a uniform ``grid_shape`` grid.
+    This is required for SU2 volume solutions, whose nodes are unstructured and
+    therefore cannot be reshaped into an image directly. If no coordinates are
+    available, the function falls back to a plain row-major reshape (used for
+    already-structured inputs), which requires ``len(column) == H * W``.
+
     Args:
-        table: dict from column name to 1D array of length N = H * W.
+        table: dict from column name to 1D array.
         field_names: ordered list of columns to stack.
-        grid_shape: (H, W). The product must match the length of each selected column.
+        grid_shape: (H, W) of the output grid.
 
     Returns:
-        A numpy array of shape (len(field_names), H, W), where each channel corresponds
-        to one column in 'field_names', reshaped in row-major order (C, H, W).
+        A numpy array of shape (len(field_names), H, W).
 
     Raises:
         KeyError if a requested field is missing.
-        ValueError if column lengths mismatch or do not match H * W.
+        ValueError if column lengths mismatch, or (reshape fallback) the length
+            does not match H * W.
     """
 
     if not field_names:
@@ -292,21 +373,30 @@ def build_field_tensor(
     for name in field_names:
         if name not in table:
             raise KeyError(f"Missing field '{name}' in table")
-        # Copy to a contiguous float64 array so that downstream reshapes raise
-        # informative errors rather than low-level "buffer size" messages when
-        # the data length is incompatible with the requested grid.
         columns.append(np.asarray(table[name], dtype=float).copy())
 
     lengths = {col.shape[0] for col in columns}
     if len(lengths) != 1:
         raise ValueError("Selected columns have mismatched lengths")
 
+    coords = _find_coordinates(table)
+    if coords is not None:
+        x, y = coords
+        (length,) = lengths
+        if x.shape[0] != length:
+            raise ValueError(
+                f"Coordinate arrays have {x.shape[0]} points but fields provide {length}"
+            )
+        return _interpolate_to_grid(columns, x, y, grid_shape)
+
+    # No coordinates: fall back to a direct reshape for structured inputs.
     h, w = grid_shape
     expected_size = h * w
     (length,) = lengths
     if length != expected_size:
         raise ValueError(
-            f"Grid shape {grid_shape} expects {expected_size} points but table provides {length}"
+            f"Grid shape {grid_shape} expects {expected_size} points but table provides "
+            f"{length}, and no nodal coordinates were found to interpolate from"
         )
 
     try:
