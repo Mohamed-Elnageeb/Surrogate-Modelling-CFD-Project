@@ -42,6 +42,15 @@ python -m cfdagent.validation.transition_study   # reproduces the table
 python -m cfdagent.validation.figures            # writes reports/figures/
 ```
 
+The mirror-image half — SU2 with Spalart-Allmaras is fully turbulent, so it
+represents the *tripped* condition and should track Ladson while disagreeing
+with Abbott — is scripted but not yet run to convergence (see Limitations):
+
+```bash
+./scripts/run_su2_validation_sweep.sh
+python -m cfdagent.validation.su2_comparison --runs runs/su2_validation
+```
+
 ---
 
 ## What the audit found
@@ -167,11 +176,16 @@ and is faster and more accurate than the CNN distilled from it.
 
 ## Status and limitations
 
-- **The SU2 side of the transition comparison is incomplete.** A sweep at
-  Re = 6×10⁶ is scripted but not finished; the preliminary α = 0 point gives
-  Cd = 0.00970 against Ladson's 0.00809 (+20 %), versus NeuralFoil's −36 %,
-  which is the expected direction for a fully-turbulent closure. Completing it
-  needs ~8 runs of roughly an hour each.
+- **The SU2 side of the transition comparison is incomplete.** The machinery is
+  in place (`scripts/run_su2_validation_sweep.sh` →
+  `cfdagent.validation.su2_comparison`) but the sweep has not been run to
+  convergence. A preliminary α = 0 point reached Cd = 0.00912 at
+  `rms[Rho] = −4.12`, still falling and well short of the −11 target, against
+  Ladson's 0.00809. The direction is what a fully-turbulent closure should give
+  — overpredicting tripped drag slightly, where NeuralFoil underpredicts it by
+  36 % — but the run is **not converged and the number is not a result**. The
+  comparison tool refuses to treat sub-target runs as final. Completing the
+  sweep needs roughly seven runs of about an hour each on four cores.
 - The Abbott dataset is digitised from a printed plot (n = 12) and its source
   file warns the digitisation is approximate. Gregory & O'Reilly (Re = 3×10⁶,
   tripped) is included as an independent check but has lift only.

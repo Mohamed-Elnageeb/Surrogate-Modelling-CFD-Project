@@ -213,3 +213,6 @@ models/
 # Generated figures
 reports/figures/*.png
 !reports/figures/.gitkeep
+
+# SU2 sweep output
+runs/

@@ -78,3 +78,38 @@ def test_transition_study_reproduces_reported_ratio():
     assert r["drag_tripped"].bias_pct < 0
     # Lift is far less sensitive than drag.
     assert r["lift_tripped"].mean_abs_pct < r["drag_tripped"].mean_abs_pct
+
+
+def test_su2_comparison_reads_history(tmp_path):
+    from cfdagent.validation.su2_comparison import collect_runs, read_history
+
+    case = tmp_path / "alpha_4"
+    case.mkdir()
+    (case / "history.csv").write_text(
+        '"rms[Rho]","CL","CD"\n-8.1,0.44,0.0091\n-9.2,0.4412,0.00905\n'
+    )
+    h = read_history(case / "history.csv")
+    assert h["CL"] == pytest.approx(0.4412)
+
+    runs = collect_runs(tmp_path)
+    assert len(runs) == 1
+    assert runs[0]["alpha"] == pytest.approx(4.0)
+    assert runs[0]["converged"] is True
+
+
+def test_su2_comparison_flags_unconverged_runs(tmp_path):
+    from cfdagent.validation.su2_comparison import collect_runs
+
+    case = tmp_path / "alpha_0"
+    case.mkdir()
+    # rms only -4 -- far short of the target; must not count as converged.
+    (case / "history.csv").write_text('"rms[Rho]","CL","CD"\n-4.0,0.005,0.0091\n')
+    runs = collect_runs(tmp_path)
+    assert runs[0]["converged"] is False
+
+
+def test_su2_comparison_needs_two_points_to_interpolate(tmp_path):
+    from cfdagent.validation.su2_comparison import compare
+
+    with pytest.raises(ValueError):
+        compare([{"alpha": 0.0, "cl": 0.0, "cd": 0.009, "rms": -9, "converged": True}])
