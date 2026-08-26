@@ -209,3 +209,7 @@ __marimo__/
 # Generated low-fidelity datasets and trained models
 data/lowfid/
 models/
+
+# Generated figures
+reports/figures/*.png
+!reports/figures/.gitkeep
