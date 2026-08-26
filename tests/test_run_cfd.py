@@ -188,7 +188,7 @@ def test_run_cfd_forwards_param_overrides(monkeypatch: pytest.MonkeyPatch, tmp_p
 
 
 def test_run_cfd_returns_error_when_mesh_regen_fails(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    def fake_regen(design_id: str, design_vec, case_dir: Path, mesh_basename: str = "mesh.su2"):
+    def fake_regen(design_id: str, design_vec, case_dir: Path, mesh_basename: str = "mesh.su2", **kwargs):
         return {
             "success": False,
             "error": "gmsh missing",
@@ -210,7 +210,7 @@ def test_run_cfd_includes_mesh_artifacts_on_success(monkeypatch: pytest.MonkeyPa
     base_cfg = tmp_path / "config.cfg"
     base_cfg.write_text("VOLUME_FILENAME=flow\nSURFACE_FILENAME=surface\n")
 
-    def fake_regen(design_id: str, design_vec, case_dir: Path, mesh_basename: str = "mesh.su2"):
+    def fake_regen(design_id: str, design_vec, case_dir: Path, mesh_basename: str = "mesh.su2", **kwargs):
         mesh_path = case_dir / mesh_basename
         mesh_path.write_text("mesh")
         airfoil_plot = case_dir / "airfoil.png"

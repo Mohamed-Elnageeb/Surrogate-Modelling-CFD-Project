@@ -1,0 +1,14 @@
+# Exact versions validated for this project.
+# Captured on the reference environment used for the reported results.
+# Python 3.11, CPU-only (no GPU required for the CFD path).
+numpy==2.4.6
+scipy==1.17.1
+pandas==3.0.5
+torch==2.13.0
+scikit-learn==1.9.0
+matplotlib==3.11.1
+meshio==5.3.5
+gmsh==4.15.2
+neuralfoil==0.3.3
+aerosandbox==4.2.10
+Pillow==12.3.0
