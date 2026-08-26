@@ -136,13 +136,15 @@ def read_su2_table(path: Path) -> Dict[str, np.ndarray]:
         # tokens are filled with NaN so downstream consumers can decide how to handle
         # incomplete rows without the parser failing outright.
         if len(tokens) < len(header_fields):
-            print(
-                f"Row {idx} in {path} has {len(tokens)} columns but {len(header_fields)} expected; padding with empty values"
+            logger.debug(
+                "Row %d in %s has %d columns but %d expected; padding with empty values",
+                idx, path, len(tokens), len(header_fields),
             )
             tokens = tokens + [""] * (len(header_fields) - len(tokens))
         elif len(tokens) > len(header_fields):
-            print(
-                f"Row {idx} in {path} has {len(tokens)} columns but {len(header_fields)} expected; truncating extra tokens"
+            logger.debug(
+                "Row %d in %s has %d columns but %d expected; truncating extra tokens",
+                idx, path, len(tokens), len(header_fields),
             )
             tokens = tokens[: len(header_fields)]
 
@@ -152,17 +154,16 @@ def read_su2_table(path: Path) -> Dict[str, np.ndarray]:
                 value = float(tok)
             except ValueError:
                 if tok != "":
-                    print(
-                        f"Row {idx} column '{name}' in {path} is non-numeric token '{tok}'; converting to NaN"
+                    logger.debug(
+                        "Row %d column '%s' in %s is non-numeric token '%s'; converting to NaN",
+                        idx, name, path, tok,
                     )
                 value = np.nan if tok == "" else np.nan
             columns[name].append(value)
 
     if header_fields is None:
-        print(f"No header found in table: {path}")
         raise ValueError(f"No header found in table: {path}")
     if columns is None or not any(columns.values()):
-        print(f"No data found in table: {path}")
         raise ValueError(f"No data found in table: {path}")
 
     return {name: np.asarray(values, dtype=float) for name, values in columns.items()}
