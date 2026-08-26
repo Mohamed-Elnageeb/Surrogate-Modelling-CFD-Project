@@ -54,3 +54,55 @@ def test_build_bl_mesh_produces_resolved_mesh(tmp_path):
     assert m["n_elements"] > 1000
     # Nodes must actually be placed inside the first cell height.
     assert m["wall_normal_min"] < m["first_layer"]
+
+
+def test_run_cfd_defaults_to_boundary_layer_mesh(monkeypatch, tmp_path):
+    """The BL mesher must be the default path, not an opt-in."""
+
+    import importlib
+
+    run_cfd_module = importlib.import_module("cfdagent.cfd.run_cfd")
+
+    called = {}
+
+    def fake_build(design_vec, out_path, cfg, verbose=False):
+        called["reynolds"] = cfg.reynolds
+        out_path.write_text("mesh")
+        return {"mesh_path": out_path, "n_nodes": 10, "n_elements": 5,
+                "first_layer": cfg.first_layer(), "bl_thickness": cfg.bl_thickness(),
+                "farfield_radius": cfg.farfield_radius, "wall_normal_min": 1e-6}
+
+    monkeypatch.setattr("cfdagent.cfd.bl_mesher.build_bl_mesh", fake_build)
+    monkeypatch.setattr(run_cfd_module, "_plot_airfoil_geometry",
+                        lambda coords, out: out)
+
+    result = run_cfd_module._regenerate_mesh_for_design(
+        "abc", np.zeros(10), tmp_path, reynolds=6e6
+    )
+
+    assert result["success"] is True
+    assert called["reynolds"] == 6e6, "reynolds must reach the mesher"
+    assert result["mesh_metrics"]["first_layer"] < 1e-5
+
+
+def test_run_cfd_can_opt_out_to_uniform_mesh(monkeypatch, tmp_path):
+    """Inviscid work may still use the uniform fallback, but must ask for it."""
+
+    import importlib
+
+    run_cfd_module = importlib.import_module("cfdagent.cfd.run_cfd")
+
+    monkeypatch.setattr(run_cfd_module, "_plot_airfoil_geometry",
+                        lambda coords, out: out)
+
+    def boom(*a, **k):
+        raise AssertionError("BL mesher must not run when boundary_layer=False")
+
+    monkeypatch.setattr("cfdagent.cfd.bl_mesher.build_bl_mesh", boom)
+    # gmsh path is exercised; just assert we got past the BL branch.
+    try:
+        run_cfd_module._regenerate_mesh_for_design(
+            "abc", np.zeros(10), tmp_path, boundary_layer=False
+        )
+    except Exception as exc:  # gmsh may be unavailable in some environments
+        assert "must not run" not in str(exc)

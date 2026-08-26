@@ -373,6 +373,8 @@ def run_cfd(
     su2_executable: str | None = None,
     param_overrides: dict[str, float | int | str] | None = None,
     regenerate_mesh: bool = True,
+    boundary_layer: bool = True,
+    reynolds: float = 1.0e6,
 ) -> dict:
     """
     Lightweight convenience wrapper for running a single SU2 case.
@@ -397,6 +399,10 @@ def run_cfd(
         su2_executable: Optional override for the SU2 binary name/path.
         param_overrides: Optional mapping of SU2 config keys to override for
             this run (e.g., {"MACH_NUMBER": 0.2, "AOA": 5}).
+        boundary_layer: When True (default), build a boundary-layer-resolved
+            mesh sized for ``reynolds``. The uniform fallback cannot resolve
+            viscous drag and should only be used for inviscid runs.
+        reynolds: Reynolds number used to size the first cell (y+ ~ 1).
         regenerate_mesh: When True (default), rebuild the SU2 mesh from the
             supplied design vector so each run uses its own geometry instead of
             sharing the baseline case mesh. Mesh and geometry preview PNGs are
@@ -411,7 +417,10 @@ def run_cfd(
     mesh_path: Path | None = case_dir / "mesh.su2"
 
     if regenerate_mesh:
-        regen = _regenerate_mesh_for_design(design_id, design_vec, case_dir, mesh_basename="mesh.su2")
+        regen = _regenerate_mesh_for_design(
+            design_id, design_vec, case_dir, mesh_basename="mesh.su2",
+            boundary_layer=boundary_layer, reynolds=reynolds,
+        )
         airfoil_plot = regen.get("airfoil_plot")
         mesh_plot = regen.get("mesh_plot")
         mesh_path = regen.get("mesh_path", mesh_path)
@@ -673,7 +682,12 @@ def _plot_mesh_outline(gmsh_module, outfile: Path, airfoil_coords: np.ndarray | 
 
 
 def _regenerate_mesh_for_design(
-    design_id: str, design_vec: Iterable[float], case_dir: Path, mesh_basename: str = "mesh.su2"
+    design_id: str,
+    design_vec: Iterable[float],
+    case_dir: Path,
+    mesh_basename: str = "mesh.su2",
+    boundary_layer: bool = True,
+    reynolds: float = 1.0e6,
 ) -> dict:
     """
     Build a fresh mesh and quick-look plots for a given design vector.
@@ -686,6 +700,31 @@ def _regenerate_mesh_for_design(
 
     coords = design_to_airfoil_coords(np.asarray(list(design_vec), dtype=float))
     airfoil_plot = _plot_airfoil_geometry(coords, case_dir / f"{design_id}_airfoil.png")
+
+    if boundary_layer:
+        # Default path: a boundary-layer-resolved mesh. The uniform fallback
+        # below leaves ~1e-2 chord spacing at the wall, which is roughly 400x
+        # too coarse to resolve viscous drag at Re=1e6 and yields L/D 3 instead
+        # of 40 on a NACA0012. Only use the fallback for inviscid work.
+        from .bl_mesher import BLMeshConfig, build_bl_mesh
+
+        try:
+            metrics = build_bl_mesh(
+                design_vec, case_dir / mesh_basename, BLMeshConfig(reynolds=reynolds)
+            )
+        except Exception as exc:  # pragma: no cover - surfaced as a failed run
+            return {
+                "success": False,
+                "error": f"Boundary-layer mesh generation failed: {exc}",
+                "airfoil_plot": airfoil_plot,
+            }
+        return {
+            "success": True,
+            "mesh_path": metrics["mesh_path"],
+            "airfoil_plot": airfoil_plot,
+            "mesh_plot": None,
+            "mesh_metrics": metrics,
+        }
 
     try:
         import gmsh  # type: ignore
