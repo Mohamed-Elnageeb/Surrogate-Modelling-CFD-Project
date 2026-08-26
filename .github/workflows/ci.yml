@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      # gmsh ships a shared library that links against OpenGL/X11 even for
+      # headless meshing, so importing it fails on a bare runner without these.
+      - name: Install gmsh system libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libglu1-mesa libxrender1 libxcursor1 libxft2 libxinerama1
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest
+
+      - name: Run test suite
+        env:
+          MPLBACKEND: Agg
+        run: pytest -m "not slow" -q
+
+  results:
+    name: Reproduce headline results
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install gmsh system libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libglu1-mesa libxrender1 libxcursor1 libxft2 libxinerama1
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      # These are the numbers quoted in the README. If a change moves them, CI
+      # fails here rather than letting the documentation drift.
+      - name: Coordinate-convention error
+        run: python -m cfdagent.experiments.convention_error
+
+      - name: Coordinate-convention census
+        run: python -m cfdagent.experiments.convention_census
+
+      - name: Transition-condition validation study
+        run: python -m cfdagent.validation.transition_study
+
+      - name: Generate figures
+        env:
+          MPLBACKEND: Agg
+        run: python -m cfdagent.validation.figures
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: figures
+          path: reports/figures/*.png
+          if-no-files-found: error
